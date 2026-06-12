@@ -78,6 +78,11 @@ coverage/
 logs/
 *.log
 
+# Local browser automation artifacts
+.playwright-cli/
+playwright-report/
+test-results/
+
 # IDEs and editors
 .vscode/
 .idea/

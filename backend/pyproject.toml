@@ -1,0 +1,53 @@
+[project]
+name = "sighttalk-api"
+version = "0.1.0"
+description = "SightTalk AI backend API"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "fastapi>=0.124.0",
+  "pydantic-settings>=2.12.0",
+  "structlog>=25.5.0",
+  "uvicorn[standard]>=0.38.0",
+]
+
+[project.scripts]
+sighttalk-api = "sighttalk_api.main:run"
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28.1",
+  "mypy>=1.19.0",
+  "pytest>=9.0.1",
+  "pytest-asyncio>=1.3.0",
+  "ruff>=0.14.8",
+]
+
+[build-system]
+requires = ["hatchling>=1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sighttalk_api"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "C4", "E", "F", "I", "S", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+mypy_path = "src"
+packages = ["sighttalk_api"]
+python_version = "3.14"
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+testpaths = ["tests"]

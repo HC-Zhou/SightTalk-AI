@@ -1,0 +1,18 @@
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      SIGHTTALK_ENVIRONMENT: local
+      SIGHTTALK_LOG_LEVEL: INFO
+      SIGHTTALK_CORS_ORIGINS: '["http://localhost:5173"]'
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
