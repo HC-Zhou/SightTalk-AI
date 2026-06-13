@@ -15,6 +15,7 @@ def create_provider(settings: Settings) -> AIProvider:
             region=settings.bailian_region,
             workspace_id=settings.bailian_workspace_id,
             model=settings.bailian_model,
+            turn_silence_duration_ms=settings.bailian_turn_silence_duration_ms,
         )
     if settings.ai_provider == "mock":
         return MockRealtimeProvider()
