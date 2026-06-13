@@ -89,6 +89,32 @@ npm run build
 
 默认应用使用 deterministic mock AI 适配器。这样本地演示稳定且不会产生付费模型调用；真实 provider 的配置入口会在后续适配器中保留。
 
+## 百炼 provider 配置
+
+默认使用 mock provider：
+
+```bash
+export VISION_ASSISTANT_AI_PROVIDER=mock
+```
+
+使用阿里云百炼 provider：
+
+```bash
+export VISION_ASSISTANT_AI_PROVIDER=bailian
+export VISION_ASSISTANT_BAILIAN_API_KEY="<your-bailian-api-key>"
+```
+
+可选模型配置：
+
+```bash
+export VISION_ASSISTANT_BAILIAN_ASR_MODEL=qwen3-asr-flash
+export VISION_ASSISTANT_BAILIAN_VISION_MODEL=qwen3.5-plus
+export VISION_ASSISTANT_BAILIAN_TTS_MODEL=cosyvoice-v3-flash
+export VISION_ASSISTANT_BAILIAN_TTS_VOICE=longanyang
+```
+
+不要把真实 API Key 写入仓库。容器启动时，`compose.yaml` 会从当前 shell 环境读取这些变量。
+
 ## 容器启动
 
 ```bash
