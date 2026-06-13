@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     ai_manual_response_enabled: bool = False
 
     default_media_mode: MediaMode = "balanced"
+    audio_noise_suppression_enabled: bool = True
     economy_max_video_fps: float = 0.2
     balanced_max_video_fps: float = 0.5
     accurate_max_video_fps: float = 1.0

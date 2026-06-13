@@ -9,6 +9,7 @@ from PIL import Image
 from sighttalk_api.agent.context import AgentSessionContext
 from sighttalk_api.agent.lifecycle import AgentLifecycle
 from sighttalk_api.agent.livekit_runtime import encode_jpeg_under_limit
+from sighttalk_api.agent.vad import pcm16_stats
 from sighttalk_api.providers.base import ImageFrame, ProviderEvent
 from sighttalk_api.schemas.livekit import MediaPolicy
 
@@ -137,9 +138,10 @@ async def test_lifecycle_skips_silent_audio_and_images_until_playout_finishes() 
     execution.playout_done.set()
     assert lifecycle._playback_completion_task is not None  # noqa: SLF001
     await lifecycle._playback_completion_task  # noqa: SLF001
-    await lifecycle.handle_audio_chunk(b"accepted", sample_rate=16_000)
+    accepted = pcm16_chunk(1_000)
+    await lifecycle.handle_audio_chunk(accepted, sample_rate=16_000)
 
-    assert tooling.audio_chunks == [b"accepted"]
+    assert tooling.audio_chunks == [accepted]
     assert execution.events[-2]["type"] == "response.done"
     assert execution.events[-2]["audio_playback_complete"] is True
     assert execution.events[-1]["status"] == "listening"
@@ -174,6 +176,9 @@ async def test_lifecycle_voice_barge_in_interrupts_assistant_playback() -> None:
     assert tooling.audio_chunks == [speech]
     statuses = [event["status"] for event in execution.events if event["type"] == "agent.status"]
     assert statuses == ["speaking", "interrupted", "listening"]
+    trace_names = [event["name"] for event in execution.events if event["type"] == "metrics.trace"]
+    assert "vad.speech_started" in trace_names
+    assert "interrupt" in trace_names
 
 
 async def test_lifecycle_interrupt_reenables_input_during_assistant_playback() -> None:
@@ -198,12 +203,83 @@ async def test_lifecycle_interrupt_reenables_input_during_assistant_playback() -
 
     await lifecycle._pump_provider_events()  # noqa: SLF001
     await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
-    await lifecycle.handle_audio_chunk(b"accepted", sample_rate=16_000)
+    accepted = pcm16_chunk(1_000)
+    await lifecycle.handle_audio_chunk(accepted, sample_rate=16_000)
 
     assert execution.interrupted
     assert tooling.control_messages == [b'{"type":"client.interrupt"}']
-    assert tooling.audio_chunks == [b"accepted"]
+    assert tooling.audio_chunks == [accepted]
     assert execution.events[-2]["status"] == "interrupted"
+    assert execution.events[-1]["status"] == "listening"
+
+
+async def test_lifecycle_suppresses_noise_before_provider_audio() -> None:
+    context = make_context()
+    tooling = FakeTooling()
+    lifecycle = AgentLifecycle(context=context, tooling=tooling)  # type: ignore[arg-type]
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+    noise = pcm16_chunk(160)
+
+    await lifecycle.handle_audio_chunk(noise, sample_rate=16_000)
+
+    assert len(tooling.audio_chunks) == 1
+    assert pcm16_stats(tooling.audio_chunks[0]).rms < pcm16_stats(noise).rms
+
+
+async def test_lifecycle_can_disable_noise_suppression() -> None:
+    context = make_context()
+    tooling = FakeTooling()
+    lifecycle = AgentLifecycle(  # type: ignore[arg-type]
+        context=context,
+        tooling=tooling,
+        noise_suppression_enabled=False,
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+    noise = pcm16_chunk(160)
+
+    await lifecycle.handle_audio_chunk(noise, sample_rate=16_000)
+
+    assert tooling.audio_chunks == [noise]
+
+
+async def test_lifecycle_publishes_turn_completion_metrics_before_final_status() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="transcript_done",
+                speaker="user",
+                text="hello",
+                message_id="user-1",
+            ),
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+            ProviderEvent(type="response_done", message_id="assistant-1"),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    execution.playout_done.set()
+    assert lifecycle._playback_completion_task is not None  # noqa: SLF001
+    await lifecycle._playback_completion_task  # noqa: SLF001
+
+    trace_names = [event["name"] for event in execution.events if event["type"] == "metrics.trace"]
+    assert trace_names[:2] == ["turn.start", "assistant.first_audio"]
+    assert "turn.complete" in trace_names
+    assert execution.events[-2]["type"] == "response.done"
     assert execution.events[-1]["status"] == "listening"
 
 

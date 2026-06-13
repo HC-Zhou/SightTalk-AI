@@ -285,7 +285,11 @@ class MainAgentWorker(BaseWorker):
 
     async def handle_frame(self, frame: Frame) -> Sequence[Frame]:
         if frame.type == "agent.interrupt":
-            await self.lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+            handle_interrupt_frame = getattr(self.lifecycle, "handle_interrupt_frame", None)
+            if callable(handle_interrupt_frame):
+                await handle_interrupt_frame(frame)
+            else:
+                await self.lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
         elif frame.type == "agent.terminal_error":
             await self.lifecycle._handle_terminal_error(  # noqa: SLF001
                 str(frame.payload.get("code", "AGENT_RUNTIME_ERROR")),

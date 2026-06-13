@@ -9,6 +9,7 @@ from enum import IntEnum
 from typing import Any, Literal
 
 FrameKind = Literal["system", "control", "data"]
+InterruptReason = Literal["client_request", "local_vad_barge_in", "runtime"]
 
 
 class FramePriority(IntEnum):
@@ -94,3 +95,18 @@ class Frame:
             target=target,
             interruptible=interruptible,
         )
+
+
+def interrupt_frame(
+    *,
+    source: str,
+    reason: InterruptReason,
+    payload: dict[str, Any] | None = None,
+) -> Frame:
+    """Create a non-interruptible internal frame for assistant interruption."""
+    return Frame.control(
+        "agent.interrupt",
+        payload={"reason": reason, **(payload or {})},
+        source=source,
+        interruptible=False,
+    )

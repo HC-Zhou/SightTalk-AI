@@ -64,6 +64,7 @@ class LiveKitRoomAgent:
         self._lifecycle = AgentLifecycle(
             context=self._context,
             tooling=self._tooling,
+            noise_suppression_enabled=settings.audio_noise_suppression_enabled,
         )
         self._execution = LiveKitExecution(
             room_name=room_name,
