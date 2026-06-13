@@ -5,6 +5,7 @@ from typing import Any
 from sighttalk_api.ai.bailian_adapters import (
     AsyncHttpClient,
     BailianAsrAdapter,
+    BailianMultimodalAdapter,
     HttpResponse,
     _audio_chunks_to_data_url,
     _extract_chat_content,
@@ -13,6 +14,7 @@ from sighttalk_api.ai.bailian_adapters import (
 )
 from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
+from sighttalk_api.media.frame_buffer import FrameItem
 
 
 class FakeResponse:
@@ -132,4 +134,46 @@ async def test_bailian_asr_posts_audio_data_url() -> None:
     assert body["messages"][0]["content"][0]["type"] == "input_audio"
     assert body["messages"][0]["content"][0]["input_audio"]["data"].startswith(
         "data:audio/webm;base64,"
+    )
+
+
+async def test_bailian_multimodal_posts_text_history_and_images() -> None:
+    client = FakeAsyncClient(
+        [FakeResponse({"choices": [{"message": {"content": "画面里有一台电脑。"}}]})]
+    )
+    adapter = BailianMultimodalAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.answer(
+        "看到了什么？",
+        [
+            FrameItem(
+                seq=7,
+                captured_at=1710000000000,
+                mime="image/jpeg",
+                data=base64.b64encode(b"frame").decode(),
+                width=640,
+                height=480,
+            )
+        ],
+        [("user", "你好"), ("assistant", "你好，我在。")],
+    )
+
+    assert result.answer == "画面里有一台电脑。"
+    body = client.posts[0]["json"]
+    assert body["model"] == "qwen3.5-plus"
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1] == {"role": "user", "content": "你好"}
+    assert body["messages"][2] == {"role": "assistant", "content": "你好，我在。"}
+    user_message = body["messages"][3]
+    assert user_message["role"] == "user"
+    assert user_message["content"][0] == {
+        "type": "text",
+        "text": "看到了什么？",
+    }
+    assert user_message["content"][1]["type"] == "image_url"
+    assert user_message["content"][1]["image_url"]["url"].startswith(
+        "data:image/jpeg;base64,"
     )
