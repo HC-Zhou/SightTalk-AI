@@ -4,6 +4,7 @@ from typing import Any
 
 from sighttalk_api.ai.bailian_adapters import (
     AsyncHttpClient,
+    BailianAsrAdapter,
     HttpResponse,
     _audio_chunks_to_data_url,
     _extract_chat_content,
@@ -93,4 +94,42 @@ def test_audio_chunks_to_data_url_joins_base64_payloads() -> None:
 
     assert _audio_chunks_to_data_url(chunks) == (
         "data:audio/webm;base64," + base64.b64encode(b"hello world").decode()
+    )
+
+
+async def test_bailian_asr_returns_empty_text_for_empty_chunks() -> None:
+    adapter = BailianAsrAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test")
+    )
+
+    result = await adapter.transcribe([])
+
+    assert result.text == ""
+
+
+async def test_bailian_asr_posts_audio_data_url() -> None:
+    client = FakeAsyncClient(
+        [FakeResponse({"choices": [{"message": {"content": "打开摄像头"}}]})]
+    )
+    adapter = BailianAsrAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.transcribe(
+        [AudioChunk(seq=1, mime="audio/webm", data=base64.b64encode(b"audio").decode())]
+    )
+
+    assert result.text == "打开摄像头"
+    assert client.posts[0]["url"] == (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
+    assert client.posts[0]["headers"]["Authorization"] == "Bearer sk-test"
+    body = client.posts[0]["json"]
+    assert body["model"] == "qwen3-asr-flash"
+    assert body["asr_options"] == {"enable_itn": False}
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][0]["content"][0]["type"] == "input_audio"
+    assert body["messages"][0]["content"][0]["input_audio"]["data"].startswith(
+        "data:audio/webm;base64,"
     )

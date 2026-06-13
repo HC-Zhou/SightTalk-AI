@@ -2,6 +2,9 @@ import base64
 from collections.abc import Awaitable, Mapping
 from typing import Any, Protocol
 
+import httpx
+
+from sighttalk_api.ai.adapters import AsrResult
 from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
 from sighttalk_api.media.frame_buffer import FrameItem
@@ -84,3 +87,44 @@ def _frame_to_image_content(frame: FrameItem) -> JsonObject:
             "url": f"data:{mime};base64,{frame.data}",
         },
     }
+
+
+class BailianAsrAdapter:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        http_client: AsyncHttpClient | None = None,
+    ) -> None:
+        self.settings = settings
+        self.api_key = _require_api_key(settings)
+        self.client = http_client or httpx.AsyncClient(
+            timeout=settings.bailian_timeout_seconds
+        )
+
+    async def transcribe(self, chunks: list[AudioChunk]) -> AsrResult:
+        if not chunks:
+            return AsrResult(text="")
+
+        payload = {
+            "model": self.settings.bailian_asr_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": _audio_chunks_to_data_url(chunks)},
+                        }
+                    ],
+                }
+            ],
+            "asr_options": {"enable_itn": False},
+        }
+        response = await self.client.post(
+            _join_url(self.settings.bailian_compatible_base_url, "chat/completions"),
+            headers=_authorization_headers(self.api_key),
+            json=payload,
+        )
+        response.raise_for_status()
+        return AsrResult(text=_extract_chat_content(response.json()))
