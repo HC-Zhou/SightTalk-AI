@@ -92,5 +92,10 @@ npm run build
 ## 容器启动
 
 ```bash
-docker compose up --build
+./scripts/docker-run.sh
 ```
+
+脚本会使用 Docker Compose 构建并启动后端和前端：
+
+- Frontend: <http://127.0.0.1:5173>
+- Backend health: <http://127.0.0.1:8000/api/v1/health>

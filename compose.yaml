@@ -6,6 +6,7 @@ services:
       SIGHTTALK_ENVIRONMENT: local
       SIGHTTALK_LOG_LEVEL: INFO
       SIGHTTALK_CORS_ORIGINS: '["http://localhost:5173"]'
+      VISION_ASSISTANT_AI_PROVIDER: mock
     ports:
       - "8000:8000"
 
