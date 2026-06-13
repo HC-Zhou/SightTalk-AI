@@ -1,10 +1,10 @@
 import { LogOut, Phone, PhoneOff, Sparkles, UserRound, Zap } from 'lucide-react';
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 import { getCurrentUser, loginUser, registerUser } from '../features/auth/api';
 import type { AuthCredentials, AuthResponse, AuthUser } from '../features/auth/types';
 import { useSightTalkSession, statusLabel } from '../features/session/useSightTalkSession';
-import type { ConversationMessage, SessionStatus } from '../features/session/types';
+import type { SessionStatus } from '../features/session/types';
 
 const cn = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
 const AUTH_TOKEN_STORAGE_KEY = 'sighttalk.auth.token';
@@ -36,8 +36,6 @@ const logoutButton = cn(
   'bg-red-500/74 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_12px_28px_rgba(185,28,28,0.26),0_0_22px_rgba(248,113,113,0.24)] hover:-translate-y-0.5 hover:bg-red-500/88 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_16px_34px_rgba(185,28,28,0.32),0_0_30px_rgba(248,113,113,0.34)] focus-visible:outline-red-300',
 );
 const dockButtonGlow = 'motion-safe:enabled:animate-dock-glow';
-const captionBase =
-  'mx-auto grid max-w-[min(680px,62vw)] gap-2 rounded-2xl bg-white/72 px-4 py-3 text-left text-[0.92rem] font-semibold leading-[1.35] text-slate-950 shadow-[0_12px_28px_rgba(15,23,42,0.18)] backdrop-blur-md';
 
 const statusDotClasses: Record<SessionStatus, string> = {
   idle: 'bg-slate-400',
@@ -59,10 +57,6 @@ export function App() {
   const session = useSightTalkSession(authToken || undefined);
   const canStart = session.status === 'idle' || session.status === 'ended' || session.status === 'error';
   const isActive = !canStart && session.status !== 'requesting-permission';
-  const captionMessages = useMemo(
-    () => recentConversationTurns(session.messages, 2),
-    [session.messages],
-  );
 
   useEffect(() => {
     if (videoRef.current) {
@@ -189,34 +183,6 @@ export function App() {
         </button>
       </aside>
 
-      {session.localPreviewStream && (
-        <section
-          className="absolute left-1/2 top-[58%] z-40 w-[min(720px,64vw)] -translate-x-1/2"
-          aria-live="polite"
-        >
-          <div className={captionBase}>
-            {captionMessages.length > 0 ? (
-              captionMessages.map((message) => (
-                <p
-                  className={cn(
-                    'm-0',
-                    message.speaker === 'user' ? 'text-slate-700' : 'text-slate-950',
-                  )}
-                  key={message.id}
-                >
-                  <span className="mr-2 text-[0.76rem] font-black uppercase text-slate-500">
-                    {message.speaker === 'user' ? '你' : 'AI'}
-                  </span>
-                  {message.text}
-                </p>
-              ))
-            ) : (
-              <p className="m-0 text-center text-slate-950">点击开始后直接说话，我会结合摄像头画面回答。</p>
-            )}
-          </div>
-        </section>
-      )}
-
       {session.error && (
         <div
           className="absolute bottom-[114px] left-1/2 z-50 flex w-[min(680px,calc(100vw-64px))] -translate-x-1/2 items-center justify-center gap-3 rounded-3xl border border-rose-200 bg-rose-50 px-4 py-[13px] text-rose-800 shadow-[0_18px_45px_rgba(190,18,60,0.1)]"
@@ -253,27 +219,6 @@ export function App() {
       </footer>
     </main>
   );
-}
-
-function recentConversationTurns(messages: ConversationMessage[], maxTurns: number) {
-  if (messages.length === 0) {
-    return [];
-  }
-  let userTurns = 0;
-  let startIndex = messages.length - 1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    startIndex = index;
-    if (messages[index].speaker === 'user') {
-      userTurns += 1;
-      if (userTurns === maxTurns) {
-        break;
-      }
-    }
-  }
-  if (userTurns === 0) {
-    return messages.slice(-maxTurns);
-  }
-  return messages.slice(startIndex);
 }
 
 interface AuthScreenProps {

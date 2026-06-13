@@ -2,7 +2,6 @@
 
 @theme {
   --animate-dock-glow: dock-glow 2.8s ease-in-out infinite;
-  --animate-caption-scroll: caption-scroll 10s linear 0.8s forwards;
 
   @keyframes dock-glow {
     0%, 100% {
@@ -20,13 +19,4 @@
     }
   }
 
-  @keyframes caption-scroll {
-    0%, 16% {
-      transform: translateY(0);
-    }
-
-    100% {
-      transform: translateY(calc(-100% + 2.5rem));
-    }
-  }
 }
