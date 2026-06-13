@@ -6,6 +6,7 @@ import { StatusBar } from "./components/StatusBar";
 import { VideoPreview } from "./components/VideoPreview";
 import { useCameraSampler } from "./hooks/useCameraSampler";
 import { useMicrophoneRecorder } from "./hooks/useMicrophoneRecorder";
+import { createApiConfig } from "./shared/apiConfig";
 import { initialSessionState, sessionReducer } from "./shared/sessionReducer";
 import { type ClientStatus, VisionSessionClient } from "./shared/wsClient";
 
@@ -18,10 +19,7 @@ export default function App() {
   const clientRef = useRef<VisionSessionClient | null>(null);
   const camera = useCameraSampler(state.policy);
   const microphone = useMicrophoneRecorder();
-
-  const wsUrl = useMemo(() => {
-    return `ws://127.0.0.1:8000/ws/session/${SESSION_ID}`;
-  }, []);
+  const apiConfig = useMemo(() => createApiConfig(), []);
 
   useEffect(() => {
     if (!state.ttsUrl) {
@@ -34,7 +32,8 @@ export default function App() {
   const startSession = async () => {
     clientRef.current?.close();
     const client = new VisionSessionClient({
-      url: wsUrl,
+      sessionId: SESSION_ID,
+      apiConfig,
       onEvent: dispatch,
       onStatus: setTransportStatus
     });
