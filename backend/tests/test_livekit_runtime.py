@@ -27,6 +27,10 @@ def make_context() -> AgentSessionContext:
     )
 
 
+def pcm16_chunk(sample: int, *, count: int = 1_600) -> bytes:
+    return b"".join(sample.to_bytes(2, "little", signed=True) for _ in range(count))
+
+
 def test_encode_jpeg_under_limit_compresses_large_frame() -> None:
     image = Image.new("RGB", (1280, 720), color=(82, 120, 180))
 
@@ -95,7 +99,7 @@ async def test_lifecycle_publishes_single_terminal_error() -> None:
     assert errors[0]["message"] == "first"
 
 
-async def test_lifecycle_pauses_input_until_assistant_playout_finishes() -> None:
+async def test_lifecycle_skips_silent_audio_and_images_until_playout_finishes() -> None:
     context = make_context()
     tooling = PlaybackTooling(
         [
@@ -118,7 +122,7 @@ async def test_lifecycle_pauses_input_until_assistant_playout_finishes() -> None
 
     await lifecycle._pump_provider_events()  # noqa: SLF001
     await asyncio.sleep(0)
-    await lifecycle.handle_audio_chunk(b"dropped", sample_rate=16_000)
+    await lifecycle.handle_audio_chunk(pcm16_chunk(0), sample_rate=16_000)
     await lifecycle.handle_image_frame(
         ImageFrame(data=b"dropped-image", mime_type="image/jpeg", width=10, height=10)
     )
@@ -139,6 +143,37 @@ async def test_lifecycle_pauses_input_until_assistant_playout_finishes() -> None
     assert execution.events[-2]["type"] == "response.done"
     assert execution.events[-2]["audio_playback_complete"] is True
     assert execution.events[-1]["status"] == "listening"
+
+
+async def test_lifecycle_voice_barge_in_interrupts_assistant_playback() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+    speech = pcm16_chunk(3_000)
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    await lifecycle.handle_audio_chunk(speech, sample_rate=16_000)
+
+    assert execution.interrupted
+    assert tooling.control_messages == [b'{"type":"client.interrupt"}']
+    assert tooling.audio_chunks == [speech]
+    statuses = [event["status"] for event in execution.events if event["type"] == "agent.status"]
+    assert statuses == ["speaking", "interrupted", "listening"]
 
 
 async def test_lifecycle_interrupt_reenables_input_during_assistant_playback() -> None:

@@ -376,7 +376,7 @@ describe('App', () => {
     expect(play).toHaveBeenCalled();
   });
 
-  it('pauses microphone while keeping camera preview during assistant audio', async () => {
+  it('keeps local media enabled for voice barge-in during assistant audio', async () => {
     const { stream, audio, video } = createStream();
     vi.stubGlobal('navigator', {
       mediaDevices: {
@@ -402,7 +402,7 @@ describe('App', () => {
       });
     });
 
-    expect(audio.enabled).toBe(false);
+    expect(audio.enabled).toBe(true);
     expect(video.enabled).toBe(true);
 
     act(() => {

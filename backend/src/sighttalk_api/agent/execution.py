@@ -183,8 +183,6 @@ class LiveKitExecution:
         )
         try:
             async for event in audio_stream:
-                if not self._input_enabled():
-                    continue
                 frame = event.frame
                 await self._on_audio_chunk(
                     bytes(frame.data),
