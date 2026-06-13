@@ -266,7 +266,7 @@ describe('App', () => {
     );
   });
 
-  it('renders realtime captions and sends interrupt only', async () => {
+  it('hides realtime captions and sends interrupt only', async () => {
     const { stream } = createStream();
     vi.stubGlobal('navigator', {
       mediaDevices: {
@@ -340,10 +340,10 @@ describe('App', () => {
 
     expect(screen.queryByText('第一轮问题')).not.toBeInTheDocument();
     expect(screen.queryByText('第一轮回答')).not.toBeInTheDocument();
-    expect(screen.getByText('第二轮问题')).toBeInTheDocument();
-    expect(screen.getByText('第二轮回答')).toBeInTheDocument();
-    expect(screen.getByText('第三轮问题')).toBeInTheDocument();
-    expect(screen.getByText('第三轮回答')).toBeInTheDocument();
+    expect(screen.queryByText('第二轮问题')).not.toBeInTheDocument();
+    expect(screen.queryByText('第二轮回答')).not.toBeInTheDocument();
+    expect(screen.queryByText('第三轮问题')).not.toBeInTheDocument();
+    expect(screen.queryByText('第三轮回答')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '打断' }));
 
@@ -370,7 +370,7 @@ describe('App', () => {
       });
     });
 
-    expect(screen.getByText('新的回答')).toBeInTheDocument();
+    expect(screen.queryByText('新的回答')).not.toBeInTheDocument();
     expect(screen.queryByText('新的回答新的回答')).not.toBeInTheDocument();
     expect(audioElement.muted).toBe(false);
     expect(play).toHaveBeenCalled();
