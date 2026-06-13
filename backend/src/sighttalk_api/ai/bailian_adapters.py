@@ -1,14 +1,34 @@
 import base64
-from typing import Any
-
-import httpx
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
 from sighttalk_api.media.frame_buffer import FrameItem
 
 type JsonObject = dict[str, Any]
-type AsyncHttpClient = httpx.AsyncClient
+
+
+class HttpResponse(Protocol):
+    status_code: int
+    headers: Mapping[str, str]
+    content: bytes
+
+    def raise_for_status(self) -> None: ...
+
+    def json(self) -> JsonObject: ...
+
+
+class AsyncHttpClient(Protocol):
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: JsonObject,
+    ) -> HttpResponse: ...
+
+    async def get(self, url: str) -> HttpResponse: ...
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -23,12 +43,13 @@ def _authorization_headers(api_key: str) -> dict[str, str]:
 
 
 def _require_api_key(settings: Settings) -> str:
-    if settings.bailian_api_key is None or not settings.bailian_api_key.strip():
+    api_key = settings.bailian_api_key.strip() if settings.bailian_api_key else ""
+    if not api_key:
         raise ValueError(
             "VISION_ASSISTANT_BAILIAN_API_KEY is required when "
             "VISION_ASSISTANT_AI_PROVIDER=bailian."
         )
-    return settings.bailian_api_key
+    return api_key
 
 
 def _extract_chat_content(payload: JsonObject) -> str:
