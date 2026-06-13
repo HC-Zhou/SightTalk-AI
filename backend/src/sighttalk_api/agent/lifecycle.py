@@ -9,11 +9,20 @@ from typing import Any, Literal
 
 from sighttalk_api.agent.context import AgentSessionContext, utc_now
 from sighttalk_api.agent.execution import LiveKitExecution
+from sighttalk_api.agent.frames import Frame, interrupt_frame
+from sighttalk_api.agent.metrics import RealtimeMetrics
+from sighttalk_api.agent.noise import (
+    NoiseSuppressionConfig,
+    NoiseSuppressionResult,
+    NoiseSuppressor,
+)
 from sighttalk_api.agent.tooling import AgentTooling
+from sighttalk_api.agent.vad import LocalVAD, LocalVADResult, pcm16_stats
 from sighttalk_api.providers.base import ImageFrame
 
 PCM16_BARGE_IN_RMS_THRESHOLD = 700.0
 PCM16_BARGE_IN_PEAK_THRESHOLD = 1_600
+CLIENT_INTERRUPT_CONTROL_MESSAGE = b'{"type":"client.interrupt"}'
 
 LifecycleState = Literal[
     "created",
@@ -40,6 +49,7 @@ class AgentLifecycle:
         context: AgentSessionContext,
         tooling: AgentTooling,
         execution: LiveKitExecution | None = None,
+        noise_suppression_enabled: bool = True,
     ) -> None:
         self.context = context
         self.tooling = tooling
@@ -54,6 +64,12 @@ class AgentLifecycle:
         self._stopping = False
         self._assistant_playback_active = False
         self._playback_completion_task: asyncio.Task[None] | None = None
+        self._vad = LocalVAD()
+        self._metrics = RealtimeMetrics()
+        self._noise_suppressor = NoiseSuppressor(
+            NoiseSuppressionConfig(enabled=noise_suppression_enabled)
+        )
+        self._noise_trace_sent = False
 
     def set_execution(self, execution: LiveKitExecution) -> None:
         """Attach the transport layer after dependency construction."""
@@ -115,25 +131,28 @@ class AgentLifecycle:
     async def handle_audio_chunk(self, data: bytes, *, sample_rate: int) -> None:
         """Forward microphone audio only after the provider is ready."""
         await self._provider_ready.wait()
+        noise_result = self._noise_suppressor.process(data)
+        if noise_result.applied:
+            await self._publish_noise_trace(noise_result)
+        audio_data = noise_result.data
+        vad_result = self._vad.process(audio_data, enabled=self.context.media_policy.vad_enabled)
+        if vad_result.event == "speech_started":
+            await self._publish_vad_trace(vad_result)
         if not self._input_enabled.is_set():
-            if not (
-                self._assistant_playback_active
-                and is_probable_user_speech(data)
-            ):
+            if not (self._assistant_playback_active and vad_result.speech_detected):
                 return
-            await self._interrupt_assistant_playback()
-            try:
-                event = await self.tooling.handle_control_message(b'{"type":"client.interrupt"}')
-            except RuntimeError as exc:
-                await self._handle_terminal_error("PROVIDER_UNAVAILABLE", str(exc))
-                return
-            if event is not None:
-                if event.get("type") == "agent.status":
-                    status = str(event.get("status", "listening"))
-                    self.state = "listening" if status == "listening" else self.state
-                await self.publish_event(event)
+            await self._handle_interrupt_frame(
+                interrupt_frame(
+                    source="local_vad",
+                    reason="local_vad_barge_in",
+                    payload={
+                        "rms": round(vad_result.rms, 2),
+                        "peak": vad_result.peak,
+                    },
+                )
+            )
         try:
-            await self.tooling.send_audio(data, sample_rate=sample_rate)
+            await self.tooling.send_audio(audio_data, sample_rate=sample_rate)
             self._provider_audio_started.set()
         except RuntimeError as exc:
             await self._handle_terminal_error("PROVIDER_UNAVAILABLE", str(exc))
@@ -155,7 +174,10 @@ class AgentLifecycle:
     async def handle_control_message(self, data: bytes) -> None:
         """Apply local control effects before forwarding control to the provider."""
         if is_interrupt_message(data):
-            await self._interrupt_assistant_playback()
+            await self._handle_interrupt_frame(
+                interrupt_frame(source="client", reason="client_request")
+            )
+            return
         try:
             event = await self.tooling.handle_control_message(data)
         except RuntimeError as exc:
@@ -172,10 +194,19 @@ class AgentLifecycle:
         if self.execution is not None:
             await self.execution.publish_event(payload)
 
+    async def handle_interrupt_frame(self, frame: Frame) -> None:
+        """Handle one internal interruption frame from any source."""
+        await self._handle_interrupt_frame(frame)
+
     async def _pump_provider_events(self) -> None:
         """Continuously bridge provider events to LiveKit frontend events."""
         try:
             async for event in self.tooling.events():
+                if (
+                    event.type in {"transcript_delta", "transcript_done"}
+                    and event.speaker == "user"
+                ):
+                    await self._mark_user_turn_started(source="provider_transcript")
                 if self.execution is not None and event.type == "audio_delta" and event.audio:
                     await self._begin_assistant_playback()
                     await self.execution.play_assistant_audio(event.audio)
@@ -189,6 +220,11 @@ class AgentLifecycle:
                     and self._assistant_playback_active
                 ):
                     continue
+                if event.type == "error":
+                    await self._publish_metrics_trace(
+                        "provider.error",
+                        self._metrics.mark_provider_error(code=event.code),
+                    )
                 payload = await self.tooling.handle_provider_event(event)
                 if payload is not None:
                     await self.publish_event(payload)
@@ -202,6 +238,10 @@ class AgentLifecycle:
         self.state = "error"
         if not self._terminal_error_sent:
             self._terminal_error_sent = True
+            await self._publish_metrics_trace(
+                "provider.error",
+                self._metrics.mark_provider_error(code=code),
+            )
             await self.publish_event(self.context.error_event(code, message))
         self._stopped.set()
 
@@ -214,6 +254,10 @@ class AgentLifecycle:
         self._provider_audio_started.clear()
         self.state = "speaking"
         await self.publish_event(self.context.status_event("speaking"))
+        await self._publish_metrics_trace(
+            "assistant.first_audio",
+            self._metrics.mark_assistant_response_started(),
+        )
 
     def _schedule_playback_completion(self, message_id: str) -> None:
         """Restore user input after LiveKit has played queued assistant audio."""
@@ -233,6 +277,10 @@ class AgentLifecycle:
         self._input_enabled.set()
         if self.state not in {"error", "ended"}:
             self.state = "listening"
+            await self._publish_metrics_trace(
+                "turn.complete",
+                self._metrics.mark_turn_completed(),
+            )
             await self.publish_event(self._response_done_event(message_id))
             await self.publish_event(self.context.status_event("listening"))
 
@@ -254,6 +302,63 @@ class AgentLifecycle:
         self._input_enabled.set()
         self.state = "interrupted"
         await self.publish_event(self.context.status_event("interrupted"))
+
+    async def _handle_interrupt_frame(self, frame: Frame) -> None:
+        """Apply local interruption effects and notify the provider once."""
+        reason = str(frame.payload.get("reason", "runtime"))
+        await self._publish_metrics_trace(
+            "interrupt",
+            self._metrics.mark_interrupt(source=frame.source, reason=reason),
+        )
+        await self._interrupt_assistant_playback()
+        try:
+            event = await self.tooling.handle_control_message(CLIENT_INTERRUPT_CONTROL_MESSAGE)
+        except RuntimeError as exc:
+            await self._handle_terminal_error("PROVIDER_UNAVAILABLE", str(exc))
+            return
+        if event is None:
+            return
+        if event.get("type") == "agent.status":
+            status = str(event.get("status", "listening"))
+            self.state = "listening" if status == "listening" else self.state
+        await self.publish_event(event)
+
+    async def _mark_user_turn_started(self, *, source: str, force_new: bool = False) -> None:
+        fields = self._metrics.mark_user_turn_started(source=source, force_new=force_new)
+        if fields is not None:
+            await self._publish_metrics_trace("turn.start", fields)
+
+    async def _publish_vad_trace(self, result: LocalVADResult) -> None:
+        await self._mark_user_turn_started(
+            source="local_vad",
+            force_new=self._assistant_playback_active,
+        )
+        await self._publish_metrics_trace(
+            "vad.speech_started",
+            {
+                "rms": round(result.rms, 2),
+                "peak": result.peak,
+                "noise_rms": round(result.noise_rms, 2),
+                "threshold": round(result.threshold, 2),
+            },
+        )
+
+    async def _publish_noise_trace(self, result: NoiseSuppressionResult) -> None:
+        if self._noise_trace_sent:
+            return
+        self._noise_trace_sent = True
+        await self._publish_metrics_trace(
+            "audio.noise_suppressed",
+            {
+                "raw_rms": round(result.raw.rms, 2),
+                "cleaned_rms": round(result.cleaned.rms, 2),
+                "noise_rms": round(result.noise_rms, 2),
+                "threshold": round(result.threshold, 2),
+            },
+        )
+
+    async def _publish_metrics_trace(self, name: str, fields: dict[str, Any]) -> None:
+        await self.publish_event(self.context.metrics_event(name, fields))
 
     def _clear_playback_completion_task(self, task: asyncio.Task[None]) -> None:
         if self._playback_completion_task is task:
@@ -287,19 +392,8 @@ def is_interrupt_message(data: bytes) -> bool:
 
 def is_probable_user_speech(data: bytes) -> bool:
     """Return whether a 16-bit PCM chunk is loud enough to barge in."""
-    sample_count = len(data) // 2
-    if sample_count <= 0:
-        return False
-    total_square = 0
-    peak = 0
-    for index in range(sample_count):
-        offset = index * 2
-        sample = int.from_bytes(data[offset : offset + 2], "little", signed=True)
-        abs_sample = abs(sample)
-        peak = max(peak, abs_sample)
-        total_square += sample * sample
-    rms = (total_square / sample_count) ** 0.5
+    stats = pcm16_stats(data)
     return (
-        rms >= PCM16_BARGE_IN_RMS_THRESHOLD
-        and peak >= PCM16_BARGE_IN_PEAK_THRESHOLD
+        stats.rms >= PCM16_BARGE_IN_RMS_THRESHOLD
+        and stats.peak >= PCM16_BARGE_IN_PEAK_THRESHOLD
     )

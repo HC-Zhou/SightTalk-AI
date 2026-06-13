@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -232,6 +233,18 @@ class AgentSessionContext:
             "audio_seconds": round(self.audio_seconds, 2),
             "image_frames_sent": self.image_frames_sent,
             "mode": self.media_policy.mode,
+        }
+
+    def metrics_event(self, name: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+        """Create a trace event with current usage counters attached."""
+        return {
+            "type": "metrics.trace",
+            "session_id": self.session_id,
+            "timestamp": utc_now(),
+            "name": name,
+            "audio_seconds": round(self.audio_seconds, 2),
+            "image_frames_sent": self.image_frames_sent,
+            **dict(fields),
         }
 
     def error_event(self, code: str, message: str) -> dict[str, Any]:
