@@ -13,7 +13,7 @@ from sighttalk_api.schemas.livekit import MediaMode, MediaPolicy
 
 DEFAULT_BAILIAN_REALTIME_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_BAILIAN_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-MemoryBackend = Literal["local_jsonl", "mem0", "disabled"]
+MemoryBackend = Literal["local_markdown", "local_jsonl", "disabled"]
 
 
 class Settings(BaseSettings):
@@ -29,13 +29,10 @@ class Settings(BaseSettings):
     auth_secret_key: str = "dev-auth-secret-change-me"
     auth_token_ttl_seconds: int = 604_800
     harness_memory_max_items: int = 20
-    memory_backend: MemoryBackend = "local_jsonl"
-    mem0_api_key: str = ""
-    mem0_host: str = ""
-    mem0_local_config_json: str = ""
-    mem0_agent_id: str = "sighttalk"
-    mem0_search_limit: int = 5
-    mem0_search_threshold: float = 0.3
+    memory_backend: MemoryBackend = "local_markdown"
+    memory_agent_id: str = "sighttalk"
+    memory_search_limit: int = 5
+    memory_search_threshold: float = 0.3
     short_memory_max_messages: int = 24
     short_memory_max_estimated_tokens: int = 8000
 
@@ -101,10 +98,6 @@ class Settings(BaseSettings):
             ):
                 if not value:
                     missing.append(env_name)
-        if self.memory_backend == "mem0" and not (
-            self.mem0_api_key or self.mem0_host or self.mem0_local_config_json
-        ):
-            missing.append("MEM0_API_KEY or MEM0_HOST or MEM0_LOCAL_CONFIG_JSON")
         if missing:
             joined = ", ".join(missing)
             raise ValueError(f"Missing required configuration: {joined}")
