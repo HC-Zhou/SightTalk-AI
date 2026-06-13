@@ -6,7 +6,7 @@ import pytest
 
 from sighttalk_api.providers.bailian import (
     BailianRealtimeProvider,
-    is_stale_image_protocol_error,
+    is_recoverable_protocol_error,
     normalize_realtime_model,
     normalize_realtime_url,
     realtime_url_with_model,
@@ -38,6 +38,16 @@ def make_provider() -> BailianRealtimeProvider:
         workspace_id="",
         model="qwen3-omni-flash-realtime",
     )
+
+
+def bailian_error(message: str) -> dict[str, object]:
+    return {
+        "type": "error",
+        "error": {
+            "code": "PROVIDER_PROTOCOL_ERROR",
+            "message": message,
+        },
+    }
 
 
 async def test_bailian_connect_uses_session_update(monkeypatch) -> None:
@@ -298,26 +308,43 @@ async def test_bailian_skips_images_after_current_audio_buffer_commits(
     ]
 
 
-def test_bailian_suppresses_stale_image_protocol_errors() -> None:
+def test_bailian_suppresses_recoverable_protocol_errors() -> None:
     provider = make_provider()
 
-    event = provider._map_event(  # noqa: SLF001
-        {
-            "type": "error",
-            "error": {
-                "code": "PROVIDER_PROTOCOL_ERROR",
-                "message": "Error append image before append audio.",
-            },
-        }
+    image_event = provider._map_event(  # noqa: SLF001
+        bailian_error("Error append image before append audio.")
+    )
+    cancel_event = provider._map_event(  # noqa: SLF001
+        bailian_error("Conversation has none active response")
     )
 
-    assert event is None
-    assert is_stale_image_protocol_error(
+    assert image_event is None
+    assert cancel_event is None
+    assert is_recoverable_protocol_error(
         {
             "code": "PROVIDER_PROTOCOL_ERROR",
             "message": "Error append image before append audio.",
         }
     )
+    assert is_recoverable_protocol_error(
+        {
+            "code": "PROVIDER_PROTOCOL_ERROR",
+            "message": "Conversation has none active response",
+        }
+    )
+
+
+def test_bailian_keeps_unrecoverable_provider_protocol_errors() -> None:
+    provider = make_provider()
+
+    event = provider._map_event(  # noqa: SLF001
+        bailian_error("Unexpected provider failure")
+    )
+
+    assert event is not None
+    assert event.type == "error"
+    assert event.code == "PROVIDER_PROTOCOL_ERROR"
+    assert event.message == "Unexpected provider failure"
 
 
 def test_realtime_url_with_model_preserves_existing_query() -> None:

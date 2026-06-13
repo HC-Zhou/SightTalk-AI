@@ -286,7 +286,7 @@ class BailianRealtimeProvider(AIProvider):
         if event_type in {"error", "session.error"}:
             error = payload.get("error")
             error_payload = error if isinstance(error, dict) else payload
-            if is_stale_image_protocol_error(error_payload):
+            if is_recoverable_protocol_error(error_payload):
                 self._audio_buffer_accepts_images = False
                 return None
             return ProviderEvent(
@@ -331,13 +331,16 @@ def should_close_image_input_gate(event_type: str) -> bool:
     return event_type in IMAGE_INPUT_GATE_CLOSE_EVENTS
 
 
-def is_stale_image_protocol_error(error_payload: dict[Any, Any]) -> bool:
-    """Return whether an error is a recoverable stale optional image frame."""
+def is_recoverable_protocol_error(error_payload: dict[Any, Any]) -> bool:
+    """Return whether a provider protocol error is safe to suppress."""
     code = str(error_payload.get("code", "")).lower()
     message = str(error_payload.get("message", "")).lower()
     return (
         "protocol" in code
-        and "append image before append audio" in message
+        and (
+            "append image before append audio" in message
+            or "conversation has none active response" in message
+        )
     )
 
 
