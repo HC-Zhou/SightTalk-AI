@@ -5,8 +5,6 @@ import type {
   CreateLiveKitSessionResponse,
   EndLiveKitSessionRequest,
   EndLiveKitSessionResponse,
-  AssistantTurnRequest,
-  AssistantTurnResponse,
 } from './types';
 
 async function parseApiError(response: Response): Promise<Error> {
@@ -56,16 +54,11 @@ export async function triggerMockAgentEvents(roomName: string): Promise<void> {
   }
 }
 
-export async function createAssistantTurn(
-  request: AssistantTurnRequest,
-): Promise<AssistantTurnResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/assistant/turn`, {
+export async function startLiveKitAgentSession(roomName: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/livekit/session/${roomName}/agent/start`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
   });
   if (!response.ok) {
     throw await parseApiError(response);
   }
-  return (await response.json()) as AssistantTurnResponse;
 }

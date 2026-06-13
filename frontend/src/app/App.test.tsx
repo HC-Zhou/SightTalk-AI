@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +23,7 @@ vi.mock('livekit-client', () => {
   const RoomEvent = {
     DataReceived: 'dataReceived',
     Disconnected: 'disconnected',
+    TrackSubscribed: 'trackSubscribed',
   };
 
   class Room {
@@ -114,21 +115,11 @@ function mockSessionFetch() {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }
-    if (url.endsWith('/api/v1/livekit/session/sighttalk-test/mock-events')) {
-      return new Response(JSON.stringify({ status: 'sent', room_name: 'sighttalk-test' }), {
+    if (url.endsWith('/api/v1/livekit/session/sighttalk-test/agent/start')) {
+      return new Response(JSON.stringify({ status: 'started', room_name: 'sighttalk-test' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
-    }
-    if (url.endsWith('/api/v1/assistant/turn')) {
-      return new Response(
-        JSON.stringify({
-          room_name: 'sighttalk-test',
-          text: 'I can see the camera view.',
-          bailian_session_id: 'bailian-session-test',
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
     }
     return new Response(JSON.stringify({ status: 'ended', room_name: 'sighttalk-test' }), {
       status: 200,
@@ -154,12 +145,15 @@ afterEach(() => {
 });
 
 describe('App', () => {
-  it('renders idle state', () => {
+  it('renders automatic conversation entry without manual turn controls', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'SightTalk AI' })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: '开始对话' })).toHaveLength(2);
-    expect(screen.getByText('Idle')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '视频对话助手' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始对话' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始' })).toBeInTheDocument();
+    expect(screen.queryByText('语音提问')).not.toBeInTheDocument();
+    expect(screen.queryByText('发送')).not.toBeInTheDocument();
+    expect(screen.queryByText('Accurate')).not.toBeInTheDocument();
   });
 
   it('shows recoverable error when media permission is denied', async () => {
@@ -171,13 +165,13 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole('button', { name: '开始对话' })[0]);
+    await user.click(screen.getByRole('button', { name: '开始对话' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('starts a LiveKit session and publishes local tracks', async () => {
+  it('starts LiveKit and automatically starts the backend agent', async () => {
     const { stream } = createStream();
     vi.stubGlobal('navigator', {
       mediaDevices: {
@@ -187,15 +181,21 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole('button', { name: '开始对话' })[0]);
+    await user.click(screen.getByRole('button', { name: '开始对话' }));
 
     expect(await screen.findByText('Listening')).toBeInTheDocument();
     const room = await latestRoom();
     expect(room.connect).toHaveBeenCalledWith('ws://localhost:7880', 'token');
     expect(room.localParticipant.publishTrack).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        'http://localhost:8000/api/v1/livekit/session/sighttalk-test/agent/start',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
   });
 
-  it('renders realtime events and sends controls', async () => {
+  it('renders realtime captions and sends interrupt only', async () => {
     const { stream } = createStream();
     vi.stubGlobal('navigator', {
       mediaDevices: {
@@ -205,32 +205,33 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole('button', { name: '开始对话' })[0]);
+    await user.click(screen.getByRole('button', { name: '开始对话' }));
     const room = await latestRoom();
-    room.emitData({
-      type: 'transcript.done',
-      session_id: 'sighttalk-test',
-      timestamp: new Date().toISOString(),
-      speaker: 'assistant',
-      text: 'I can see the camera view.',
-      message_id: 'msg-1',
+    act(() => {
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'user',
+        text: '桌上有什么？',
+        message_id: 'user-1',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '我看到桌面中央有一个杯子。',
+        message_id: 'assistant-1',
+      });
     });
-    room.emitData({
-      type: 'cost.estimate',
-      session_id: 'sighttalk-test',
-      timestamp: new Date().toISOString(),
-      audio_seconds: 3.2,
-      image_frames_sent: 2,
-      mode: 'balanced',
-    });
 
-    expect(await screen.findByText('I can see the camera view.')).toBeInTheDocument();
-    expect(screen.getByText('3.2s')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('桌上有什么？').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('我看到桌面中央有一个杯子。').length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('button', { name: 'Accurate' }));
-    await user.click(screen.getByRole('button', { name: 'Interrupt assistant' }));
+    await user.click(screen.getByRole('button', { name: '打断' }));
 
-    expect(room.localParticipant.publishData).toHaveBeenCalledTimes(2);
+    expect(room.localParticipant.publishData).toHaveBeenCalledTimes(1);
   });
 
   it('stops session and releases local tracks', async () => {
@@ -243,7 +244,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getAllByRole('button', { name: '开始对话' })[0]);
+    await user.click(screen.getByRole('button', { name: '开始对话' }));
     await user.click(await screen.findByRole('button', { name: '结束' }));
 
     await waitFor(() => expect(audio.stop).toHaveBeenCalled());
