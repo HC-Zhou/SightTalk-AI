@@ -5,14 +5,28 @@ export type Message = {
   text: string;
 };
 
+export type LiveSubtitle = {
+  speaker: "user" | "assistant";
+  text: string;
+  phase: "listening" | "thinking" | "streaming" | "final";
+};
+
+export type SessionError = {
+  stage: string;
+  message: string;
+  retryable: boolean;
+};
+
 export type SessionState = {
   connectionStatus: "idle" | "connecting" | "ready" | "thinking" | "error";
   policy: CapturePolicy | null;
   messages: Message[];
   assistantDraft: string;
+  liveSubtitle: LiveSubtitle | null;
   ttsUrl: string | null;
   cost: CostSnapshot | null;
   errorMessage: string | null;
+  lastError: SessionError | null;
 };
 
 export const initialSessionState: SessionState = {
@@ -20,9 +34,11 @@ export const initialSessionState: SessionState = {
   policy: null,
   messages: [],
   assistantDraft: "",
+  liveSubtitle: null,
   ttsUrl: null,
   cost: null,
-  errorMessage: null
+  errorMessage: null,
+  lastError: null
 };
 
 export function sessionReducer(state: SessionState, event: ServerEvent): SessionState {
@@ -32,7 +48,8 @@ export function sessionReducer(state: SessionState, event: ServerEvent): Session
         ...state,
         connectionStatus: "ready",
         policy: event.policy,
-        errorMessage: null
+        errorMessage: null,
+        lastError: null
       };
     case "policy.update":
       return {
@@ -42,25 +59,47 @@ export function sessionReducer(state: SessionState, event: ServerEvent): Session
     case "transcript.final":
       return {
         ...state,
-        messages: [...state.messages, { role: "user", text: event.text }]
+        messages: [...state.messages, { role: "user", text: event.text }],
+        liveSubtitle: {
+          speaker: "user",
+          text: event.text,
+          phase: "final"
+        }
       };
     case "assistant.thinking":
       return {
         ...state,
         connectionStatus: "thinking",
-        assistantDraft: ""
+        assistantDraft: "",
+        liveSubtitle: {
+          speaker: "assistant",
+          text: "",
+          phase: "thinking"
+        }
       };
-    case "assistant.text.delta":
+    case "assistant.text.delta": {
+      const assistantDraft = state.assistantDraft + event.text;
       return {
         ...state,
-        assistantDraft: state.assistantDraft + event.text
+        assistantDraft,
+        liveSubtitle: {
+          speaker: "assistant",
+          text: assistantDraft,
+          phase: "streaming"
+        }
       };
+    }
     case "assistant.text.done":
       return {
         ...state,
         connectionStatus: "ready",
         assistantDraft: "",
-        messages: [...state.messages, { role: "assistant", text: event.text }]
+        messages: [...state.messages, { role: "assistant", text: event.text }],
+        liveSubtitle: {
+          speaker: "assistant",
+          text: event.text,
+          phase: "final"
+        }
       };
     case "tts.ready":
       return {
@@ -83,8 +122,12 @@ export function sessionReducer(state: SessionState, event: ServerEvent): Session
       return {
         ...state,
         connectionStatus: "error",
-        errorMessage: event.message
+        errorMessage: event.message,
+        lastError: {
+          stage: event.stage,
+          message: event.message,
+          retryable: event.retryable
+        }
       };
   }
 }
-

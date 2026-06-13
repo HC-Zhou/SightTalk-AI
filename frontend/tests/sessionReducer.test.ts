@@ -34,6 +34,69 @@ describe("sessionReducer", () => {
     ]);
   });
 
+  it("tracks assistant thinking as a live subtitle state", () => {
+    const state = sessionReducer(initialSessionState, { type: "assistant.thinking" });
+
+    expect(state.liveSubtitle).toEqual({
+      speaker: "assistant",
+      text: "",
+      phase: "thinking"
+    });
+  });
+
+  it("streams assistant deltas into the assistant draft and live subtitle", () => {
+    let state = sessionReducer(initialSessionState, { type: "assistant.text.delta", text: "I see" });
+    state = sessionReducer(state, { type: "assistant.text.delta", text: " a keyboard" });
+
+    expect(state.assistantDraft).toBe("I see a keyboard");
+    expect(state.liveSubtitle).toEqual({
+      speaker: "assistant",
+      text: "I see a keyboard",
+      phase: "streaming"
+    });
+  });
+
+  it("keeps assistant final text as the latest live subtitle", () => {
+    let state = sessionReducer(initialSessionState, { type: "assistant.text.delta", text: "A laptop" });
+    state = sessionReducer(state, { type: "assistant.text.done", text: "A laptop is on the desk." });
+
+    expect(state.messages).toEqual([{ role: "assistant", text: "A laptop is on the desk." }]);
+    expect(state.liveSubtitle).toEqual({
+      speaker: "assistant",
+      text: "A laptop is on the desk.",
+      phase: "final"
+    });
+  });
+
+  it("shows final user transcript as the latest live subtitle", () => {
+    const state = sessionReducer(initialSessionState, {
+      type: "transcript.final",
+      text: "Describe the app icons."
+    });
+
+    expect(state.liveSubtitle).toEqual({
+      speaker: "user",
+      text: "Describe the app icons.",
+      phase: "final"
+    });
+  });
+
+  it("stores structured server errors for the subtitle rail", () => {
+    const state = sessionReducer(initialSessionState, {
+      type: "error",
+      stage: "asr",
+      message: "Audio decode failed",
+      retryable: true
+    });
+
+    expect(state.errorMessage).toBe("Audio decode failed");
+    expect(state.lastError).toEqual({
+      stage: "asr",
+      message: "Audio decode failed",
+      retryable: true
+    });
+  });
+
   it("stores tts url and cost snapshot", () => {
     let state = sessionReducer(initialSessionState, {
       type: "tts.ready",
