@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from sighttalk_api.api.v1.health import health, router as health_router
-
+from sighttalk_api.api.v1.health import health
+from sighttalk_api.api.v1.health import router as health_router
 
 app = FastAPI(title="SightTalk AI")
 
