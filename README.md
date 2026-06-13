@@ -73,6 +73,8 @@ The compose setup defaults to `AI_PROVIDER=mock` so the app can run without Bail
 - `BAILIAN_COMPATIBLE_API_URL`
 - `BAILIAN_TEXT_MODEL`
 - `BAILIAN_VISION_MODEL`
+- `BAILIAN_MODEL` defaults to `qwen3-omni-flash-realtime` for the realtime agent
+- `BAILIAN_REALTIME_URL` defaults to the Beijing realtime WebSocket endpoint `wss://dashscope.aliyuncs.com/api-ws/v1/realtime`
 
 When a configured Bailian application ID is unavailable or returns access denied, the backend automatically falls back to Bailian's OpenAI-compatible model endpoint using `BAILIAN_TEXT_MODEL` for text-only turns and `BAILIAN_VISION_MODEL` when a camera frame is provided.
 

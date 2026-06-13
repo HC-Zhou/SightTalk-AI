@@ -41,6 +41,7 @@ class LiveKitRoomAgent:
         self._last_video_sent_at = 0.0
         self._connected = False
         self._assistant_audio_source: rtc.AudioSource | None = None
+        self._terminal_error_sent = False
 
     async def run(self) -> None:
         self._room.on("track_subscribed", self._handle_track_subscribed)
@@ -94,10 +95,14 @@ class LiveKitRoomAgent:
         try:
             async for event in audio_stream:
                 frame = event.frame
-                await self._agent_session.handle_audio(
-                    bytes(frame.data),
-                    sample_rate=frame.sample_rate,
-                )
+                try:
+                    await self._agent_session.handle_audio(
+                        bytes(frame.data),
+                        sample_rate=frame.sample_rate,
+                    )
+                except RuntimeError as exc:
+                    await self._handle_media_provider_error(exc)
+                    return
         finally:
             await audio_stream.aclose()
 
@@ -118,7 +123,11 @@ class LiveKitRoomAgent:
                     continue
                 self._last_video_sent_at = now
                 self._agent_session.image_frames_sent += 1
-                await self._agent_session.provider.send_image(frame)
+                try:
+                    await self._agent_session.provider.send_image(frame)
+                except RuntimeError as exc:
+                    await self._handle_media_provider_error(exc)
+                    return
                 await self._publish_event(self._agent_session.cost_event())
         finally:
             await video_stream.aclose()
@@ -132,7 +141,7 @@ class LiveKitRoomAgent:
                 await self._publish_event(payload)
 
     async def _publish_assistant_audio_track(self) -> None:
-        self._assistant_audio_source = rtc.AudioSource(16_000, 1)
+        self._assistant_audio_source = rtc.AudioSource(24_000, 1)
         track = rtc.LocalAudioTrack.create_audio_track(
             "assistant-audio",
             self._assistant_audio_source,
@@ -148,11 +157,19 @@ class LiveKitRoomAgent:
             return
         frame = rtc.AudioFrame(
             audio,
-            sample_rate=16_000,
+            sample_rate=24_000,
             num_channels=1,
             samples_per_channel=samples,
         )
         await self._assistant_audio_source.capture_frame(frame)
+
+    async def _handle_media_provider_error(self, exc: RuntimeError) -> None:
+        if not self._terminal_error_sent:
+            self._terminal_error_sent = True
+            await self._publish_event(
+                self._agent_session.error_event("PROVIDER_UNAVAILABLE", str(exc))
+            )
+        self._stopped.set()
 
     async def _publish_event(self, payload: dict[str, Any]) -> None:
         if not self._connected:
@@ -169,16 +186,29 @@ def encode_video_frame(frame: rtc.VideoFrame, *, max_edge: int, quality: int) ->
         rgb = frame.convert(rtc.VideoBufferType.RGB24)
         image = Image.frombytes("RGB", (rgb.width, rgb.height), bytes(rgb.data))
         image.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=quality, optimize=True)
+        output = encode_jpeg_under_limit(image, quality=quality)
         return ImageFrame(
-            data=output.getvalue(),
+            data=output,
             mime_type="image/jpeg",
             width=image.width,
             height=image.height,
         )
     except Exception:
         return None
+
+
+def encode_jpeg_under_limit(image: Image.Image, *, quality: int, max_bytes: int = 190_000) -> bytes:
+    current = image.copy()
+    current_quality = quality
+    while True:
+        output = io.BytesIO()
+        current.save(output, format="JPEG", quality=current_quality, optimize=True)
+        data = output.getvalue()
+        if len(data) <= max_bytes or current_quality <= 45:
+            return data
+        current_quality -= 10
+        if current_quality <= 55 and max(current.size) > 480:
+            current.thumbnail((480, 480), Image.Resampling.LANCZOS)
 
 
 class LiveKitAgentManager:
