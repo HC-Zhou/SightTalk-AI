@@ -1,4 +1,4 @@
-import { Mic, Phone, PhoneOff, Radio, Sparkles, Zap } from 'lucide-react';
+import { Mic, Phone, PhoneOff, Sparkles, Zap } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 
 import { useSightTalkSession, statusLabel } from '../features/session/useSightTalkSession';
@@ -9,21 +9,23 @@ const cn = (...classes: Array<string | false | null | undefined>) => classes.fil
 const surface =
   'border border-slate-200/80 bg-white shadow-[0_18px_45px_rgba(30,45,70,0.12)]';
 const pillSurface = cn(surface, 'rounded-full');
-const panelSurface = cn(surface, 'rounded-[28px]');
 const buttonBase =
-  'inline-flex h-[54px] min-w-[116px] cursor-pointer items-center justify-center gap-2.5 rounded-full border px-5 font-black transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-45';
+  'inline-flex h-[54px] min-w-[116px] cursor-pointer items-center justify-center gap-2.5 rounded-full border px-5 font-black transition duration-150 ease-out backdrop-blur-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-45';
 const primaryButton = cn(
   buttonBase,
-  'border-sky-300 bg-gradient-to-r from-sky-500 to-cyan-400 text-white shadow-[0_14px_30px_rgba(14,116,190,0.22)] hover:-translate-y-0.5 hover:shadow-[0_18px_36px_rgba(14,116,190,0.24)] focus-visible:outline-sky-400',
+  'border-white/70 bg-sky-300/45 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_14px_30px_rgba(14,116,190,0.2),0_0_24px_rgba(56,189,248,0.24)] hover:-translate-y-0.5 hover:bg-sky-300/58 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_18px_38px_rgba(14,116,190,0.24),0_0_34px_rgba(56,189,248,0.32)] focus-visible:outline-sky-400',
 );
 const secondaryButton = cn(
   buttonBase,
-  'border-slate-200 bg-white text-slate-700 shadow-[0_12px_26px_rgba(30,45,70,0.1)] hover:-translate-y-0.5 hover:shadow-[0_18px_36px_rgba(30,45,70,0.15)] focus-visible:outline-slate-400',
+  'border-white/70 bg-white/48 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.74),0_12px_26px_rgba(30,45,70,0.12),0_0_20px_rgba(255,255,255,0.3)] hover:-translate-y-0.5 hover:bg-white/62 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_36px_rgba(30,45,70,0.16),0_0_30px_rgba(255,255,255,0.42)] focus-visible:outline-slate-400',
 );
 const dangerButton = cn(
   buttonBase,
-  'border-rose-300 bg-gradient-to-r from-rose-500 to-red-500 text-white shadow-[0_14px_30px_rgba(190,18,60,0.18)] hover:-translate-y-0.5 hover:shadow-[0_18px_36px_rgba(190,18,60,0.22)] focus-visible:outline-rose-400',
+  'border-white/65 bg-rose-300/42 text-rose-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.68),0_14px_30px_rgba(190,18,60,0.18),0_0_24px_rgba(251,113,133,0.24)] hover:-translate-y-0.5 hover:bg-rose-300/56 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_18px_38px_rgba(190,18,60,0.22),0_0_34px_rgba(251,113,133,0.32)] focus-visible:outline-rose-400',
 );
+const dockButtonGlow = 'motion-safe:enabled:animate-dock-glow';
+const captionBase =
+  'mx-auto line-clamp-2 max-w-[min(560px,52vw)] overflow-hidden rounded-2xl border px-4 py-2 text-[0.92rem] font-semibold leading-[1.35] shadow-[0_12px_28px_rgba(15,23,42,0.18)]';
 
 const statusDotClasses: Record<SessionStatus, string> = {
   idle: 'bg-slate-400',
@@ -117,55 +119,27 @@ export function App() {
         </div>
       </header>
 
-      <section
-        className="absolute bottom-[154px] left-1/2 z-40 w-[min(620px,58vw)] -translate-x-1/2 text-center"
-        aria-live="polite"
-      >
-        {latestUserMessage && (
-          <p className="mx-auto mb-2.5 w-fit max-w-[84%] rounded-full border border-slate-200 bg-white px-3.5 py-2 text-[0.9rem] leading-[1.42] text-slate-600 shadow-[0_10px_28px_rgba(30,45,70,0.09)]">
-            <span className="mr-2.5 font-black text-sky-600">你</span>
-            {latestUserMessage.text}
-          </p>
-        )}
-        <h2 className={cn(panelSurface, 'm-0 px-[18px] py-3 text-[clamp(1rem,1.6vw,1.45rem)] font-bold leading-[1.34] text-slate-800')}>
-          {latestAssistantMessage?.text ?? '点击开始后直接说话，我会结合摄像头画面回答。'}
-        </h2>
-      </section>
-
-      <aside
-        className={cn(
-          panelSurface,
-          'absolute right-8 top-[108px] z-40 max-h-[calc(100dvh-240px)] w-[292px] overflow-hidden p-4',
-        )}
-        aria-label="Realtime transcript"
-      >
-        <div className="flex items-center gap-2 text-[0.84rem] font-black text-slate-500">
-          <Radio size={16} />
-          <span>实时字幕</span>
-        </div>
-        <div className="mt-4 flex max-h-[calc(100dvh-306px)] flex-col gap-[13px] overflow-auto">
-          {session.messages.length === 0 ? (
-            <p className="m-0 leading-normal text-slate-600">
-              语音识别、视觉理解和回答会自动显示在这里。
+      {session.localPreviewStream && (
+        <section
+          className="absolute left-1/2 top-[58%] z-40 w-[min(620px,58vw)] -translate-x-1/2 text-center"
+          aria-live="polite"
+        >
+          {latestUserMessage && (
+            <p
+              className={cn(
+                captionBase,
+                'mb-2 w-fit border-white/60 bg-white/72 text-slate-950 backdrop-blur-md',
+              )}
+            >
+              <span className="mr-2.5 font-black text-sky-600">你</span>
+              {latestUserMessage.text}
             </p>
-          ) : (
-            session.messages.slice(-5).map((message) => (
-              <article
-                className={cn(
-                  'border-l-2 py-0 pl-3',
-                  message.speaker === 'assistant' ? 'border-sky-500/70' : 'border-slate-300',
-                )}
-                key={message.id}
-              >
-                <span className="mb-1 block text-[0.72rem] font-black text-slate-400">
-                  {message.speaker === 'user' ? '你' : 'AI'}
-                </span>
-                <p className="m-0 leading-normal text-slate-600">{message.text}</p>
-              </article>
-            ))
           )}
-        </div>
-      </aside>
+          <h2 className={cn(captionBase, 'm-0 border-slate-950/20 bg-slate-950/68 text-white backdrop-blur-md')}>
+            {latestAssistantMessage?.text ?? '点击开始后直接说话，我会结合摄像头画面回答。'}
+          </h2>
+        </section>
+      )}
 
       {session.error && (
         <div
@@ -193,17 +167,17 @@ export function App() {
         </div>
         <div className="pointer-events-auto col-start-2 inline-flex items-center gap-3.5">
           {canStart ? (
-            <button className={primaryButton} onClick={session.start} type="button">
+            <button className={cn(primaryButton, dockButtonGlow)} onClick={session.start} type="button">
               <Phone size={20} />
               开始
             </button>
           ) : (
             <>
-              <button className={secondaryButton} onClick={session.stop} type="button">
+              <button className={cn(secondaryButton, dockButtonGlow)} onClick={session.stop} type="button">
                 <PhoneOff size={20} />
                 结束
               </button>
-              <button className={dangerButton} disabled={!isActive} onClick={session.interrupt} type="button">
+              <button className={cn(dangerButton, dockButtonGlow)} disabled={!isActive} onClick={session.interrupt} type="button">
                 <Zap size={20} />
                 打断
               </button>
