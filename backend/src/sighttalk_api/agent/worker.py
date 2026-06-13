@@ -49,9 +49,9 @@ class AgentSession:
             short_memory_max_estimated_tokens=(
                 resolved_settings.short_memory_max_estimated_tokens
             ),
-            memory_search_limit=resolved_settings.mem0_search_limit,
-            memory_search_threshold=resolved_settings.mem0_search_threshold,
-            memory_agent_id=resolved_settings.mem0_agent_id,
+            memory_search_limit=resolved_settings.memory_search_limit,
+            memory_search_threshold=resolved_settings.memory_search_threshold,
+            memory_agent_id=resolved_settings.memory_agent_id,
             long_term_memory=create_long_term_memory(resolved_settings),
         )
         self.tooling = AgentTooling(

@@ -1,21 +1,13 @@
 from __future__ import annotations
 
-import logging
-from typing import Any
-
 from sighttalk_api.core.config import Settings
 from sighttalk_api.services.long_term_memory import (
     DisabledLongTermMemory,
-    LazyLongTermMemory,
     LocalJsonlLongTermMemory,
-    Mem0LongTermMemory,
+    LocalMarkdownMemory,
     MemoryMessage,
     MemoryScope,
-    configure_mem0_optional_dependency_logging,
     create_long_term_memory,
-    create_mem0_sdk_client,
-    mem0_flat_scope_filters,
-    mem0_scope_filters,
 )
 from sighttalk_api.services.memory import MemoryStore
 
@@ -59,99 +51,73 @@ async def test_local_jsonl_long_term_memory_isolates_users_and_skips_empty_text(
     assert store.recent(user_id="user-2", limit=5)[0].text == "Other user memory."
 
 
-async def test_mem0_long_term_memory_uses_scope_filters_and_threshold() -> None:
-    client = FakeMem0Client()
-    memory = Mem0LongTermMemory(client)
-    scope = make_scope()
-
-    results = await memory.search(scope, "desk", limit=3, threshold=0.42)
-
-    assert client.search_calls == [
-        {
-            "query": "desk",
-            "filters": {"AND": [{"user_id": "user-1"}, {"agent_id": "sighttalk"}]},
-            "top_k": 3,
-            "threshold": 0.42,
-        }
-    ]
-    assert results[0].text == "User likes blue lamps."
-    assert results[0].score == 0.9
-    assert mem0_scope_filters(scope) == {
-        "AND": [{"user_id": "user-1"}, {"agent_id": "sighttalk"}]
-    }
-
-
-async def test_mem0_long_term_memory_skips_empty_search_query() -> None:
-    client = FakeMem0Client()
-    memory = Mem0LongTermMemory(client)
-
-    results = await memory.search(make_scope(), "   ", limit=3, threshold=0.42)
-
-    assert results == []
-    assert client.search_calls == []
-
-
-async def test_mem0_long_term_memory_falls_back_to_oss_flat_filters() -> None:
-    client = FakeOssMem0Client()
-    memory = Mem0LongTermMemory(client)
-    scope = make_scope()
-
-    results = await memory.search(scope, "desk", limit=3, threshold=0.42)
-
-    assert client.search_calls == [
-        {
-            "query": "desk",
-            "filters": {"AND": [{"user_id": "user-1"}, {"agent_id": "sighttalk"}]},
-            "top_k": 3,
-            "threshold": 0.42,
-        },
-        {
-            "query": "desk",
-            "filters": {"user_id": "user-1", "agent_id": "sighttalk"},
-            "top_k": 3,
-            "threshold": 0.42,
-        },
-    ]
-    assert results[0].text == "Flat filter memory."
-    assert mem0_flat_scope_filters(scope) == {
-        "user_id": "user-1",
-        "agent_id": "sighttalk",
-    }
-
-
-async def test_mem0_long_term_memory_adds_turn_with_metadata_and_infer() -> None:
-    client = FakeMem0Client()
-    memory = Mem0LongTermMemory(client)
-    metadata = {
-        "session_id": "room-1",
-        "turn_id": "turn-1",
-        "media_mode": "balanced",
-        "has_visual_context": True,
-        "source": "sighttalk_realtime",
-    }
+async def test_local_markdown_memory_writes_readable_memory_and_history(tmp_path) -> None:
+    memory = LocalMarkdownMemory(tmp_path)
+    scope = make_scope("user/1")
 
     await memory.add_turn(
-        make_scope(),
+        scope,
         [
-            MemoryMessage(role="user", content="I prefer cool light."),
-            MemoryMessage(role="assistant", content=""),
+            MemoryMessage(role="user", content="请记住，我喜欢冷白色灯光。"),
+            MemoryMessage(role="assistant", content="好的，我会记住。"),
         ],
-        metadata,
+        {"session_id": "room-1", "turn_id": "turn-1", "source": "sighttalk_realtime"},
     )
 
-    assert client.add_calls == [
-        {
-            "messages": [{"role": "user", "content": "I prefer cool light."}],
-            "user_id": "user-1",
-            "agent_id": "sighttalk",
-            "run_id": "room-1",
-            "metadata": metadata,
-            "infer": True,
-        }
+    memory_path = tmp_path / "markdown_memory" / "sighttalk" / "user_1" / "MEMORY.md"
+    history_path = tmp_path / "markdown_memory" / "sighttalk" / "user_1" / "HISTORY.md"
+
+    assert "请记住，我喜欢冷白色灯光。" in memory_path.read_text(encoding="utf-8")
+    assert "assistant: 好的，我会记住。" in history_path.read_text(encoding="utf-8")
+    assert [result.text for result in await memory.search(scope, "", limit=5, threshold=0.3)] == [
+        "MEMORY.md:\n- 请记住，我喜欢冷白色灯光。"
     ]
+
+
+async def test_local_markdown_memory_searches_history_without_cross_user_leak(
+    tmp_path,
+) -> None:
+    memory = LocalMarkdownMemory(tmp_path)
+    user_scope = make_scope("user-1")
+    other_scope = make_scope("user-2")
+
+    await memory.add_turn(
+        user_scope,
+        [MemoryMessage(role="user", content="我的台灯是蓝色的。")],
+        {"session_id": "room-1", "turn_id": "turn-1"},
+    )
+    await memory.add_turn(
+        other_scope,
+        [MemoryMessage(role="user", content="我的台灯是红色的。")],
+        {"session_id": "room-2", "turn_id": "turn-1"},
+    )
+
+    results = await memory.search(user_scope, "蓝色 台灯", limit=5, threshold=0.3)
+
+    assert any("蓝色" in result.text for result in results)
+    assert all("红色" not in result.text for result in results)
+
+
+async def test_local_markdown_memory_appends_short_term_summary(tmp_path) -> None:
+    memory = LocalMarkdownMemory(tmp_path)
+    scope = make_scope("user-1")
+
+    await memory.add_short_term_summary(
+        scope,
+        "user: asked about lamp setup\nassistant: compared lighting options",
+        {"session_id": "room-1", "turn_ids": ["turn-1", "turn-2"]},
+    )
+
+    history = (
+        tmp_path / "markdown_memory" / "sighttalk" / "user-1" / "HISTORY.md"
+    ).read_text(encoding="utf-8")
+    assert "summary: user: asked about lamp setup assistant: compared lighting options" in history
 
 
 async def test_create_long_term_memory_selects_local_and_disabled_backends(tmp_path) -> None:
+    markdown = create_long_term_memory(
+        Settings(sighttalk_data_dir=tmp_path, memory_backend="local_markdown")
+    )
     local = create_long_term_memory(
         Settings(sighttalk_data_dir=tmp_path, memory_backend="local_jsonl")
     )
@@ -159,94 +125,6 @@ async def test_create_long_term_memory_selects_local_and_disabled_backends(tmp_p
         Settings(sighttalk_data_dir=tmp_path, memory_backend="disabled")
     )
 
+    assert isinstance(markdown, LocalMarkdownMemory)
     assert isinstance(local, LocalJsonlLongTermMemory)
     assert isinstance(disabled, DisabledLongTermMemory)
-
-
-async def test_create_long_term_memory_selects_real_mem0_backend_with_injected_client(
-    tmp_path,
-) -> None:
-    client = FakeMem0Client()
-
-    memory = create_long_term_memory(
-        Settings(
-            sighttalk_data_dir=tmp_path,
-            memory_backend="mem0",
-            mem0_api_key="key",
-        ),
-        mem0_client=client,
-    )
-
-    assert isinstance(memory, Mem0LongTermMemory)
-
-
-async def test_create_long_term_memory_lazily_initializes_real_mem0_backend(tmp_path) -> None:
-    memory = create_long_term_memory(
-        Settings(
-            sighttalk_data_dir=tmp_path,
-            memory_backend="mem0",
-            mem0_api_key="key",
-        )
-    )
-
-    assert isinstance(memory, LazyLongTermMemory)
-
-
-def test_create_mem0_sdk_client_requires_configuration_for_mem0(tmp_path) -> None:
-    settings = Settings(sighttalk_data_dir=tmp_path, memory_backend="mem0")
-
-    try:
-        create_mem0_sdk_client(settings)
-    except ValueError as exc:
-        assert "MEMORY_BACKEND=mem0 requires" in str(exc)
-    else:
-        raise AssertionError("Expected missing Mem0 configuration to fail")
-
-
-def test_configure_mem0_optional_dependency_logging_hides_spacy_warning() -> None:
-    logger = logging.getLogger("mem0.utils.spacy_models")
-    original_level = logger.level
-    try:
-        logger.setLevel(logging.NOTSET)
-        configure_mem0_optional_dependency_logging()
-
-        assert logger.level == logging.ERROR
-    finally:
-        logger.setLevel(original_level)
-
-
-class FakeMem0Client:
-    def __init__(self) -> None:
-        self.search_calls: list[dict[str, Any]] = []
-        self.add_calls: list[dict[str, Any]] = []
-
-    def search(self, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
-        self.search_calls.append(dict(kwargs))
-        return {
-            "results": [
-                {
-                    "memory": "User likes blue lamps.",
-                    "score": 0.9,
-                    "metadata": {"session_id": "old-room"},
-                }
-            ]
-        }
-
-    def add(self, **kwargs: Any) -> None:
-        self.add_calls.append(dict(kwargs))
-
-
-class FakeOssMem0Client(FakeMem0Client):
-    def search(self, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
-        self.search_calls.append(dict(kwargs))
-        filters = kwargs.get("filters")
-        if isinstance(filters, dict) and "AND" in filters:
-            raise ValueError("filters must contain at least one of: user_id, agent_id, run_id")
-        return {
-            "results": [
-                {
-                    "memory": "Flat filter memory.",
-                    "score": 0.8,
-                }
-            ]
-        }

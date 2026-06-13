@@ -107,12 +107,8 @@ class AgentSessionContext:
 
     async def build_system_prompt_async(self, *, search_query: str = "") -> str:
         """Build provider prompt through ContextWorker and MemoryWorker."""
-        await self.context_worker.summarize_if_needed()
-        memories = (
-            await self.memory_worker.search(search_query)
-            if search_query.strip()
-            else []
-        )
+        await self._consolidate_short_context_if_needed()
+        memories = await self.memory_worker.search(search_query)
         return self.context_worker.build_prompt(memories=memories)
 
     def _recent_memory_items_sync(self) -> list[MemoryContextItem]:
@@ -203,7 +199,20 @@ class AgentSessionContext:
         for turn in pending_turns:
             self._flushed_turn_ids.add(turn.turn_id)
             self._flushed_message_ids.add(turn.message_id)
+        await self._consolidate_short_context_if_needed()
         return written
+
+    async def _consolidate_short_context_if_needed(self) -> None:
+        """Summarize old short-term turns and persist the summary when supported."""
+        result = await self.context_worker.summarize_if_needed()
+        if result is None or result.used_fallback:
+            return
+        if not result.summary.strip() or not result.summarized_turns:
+            return
+        await self.memory_worker.add_short_term_summary(
+            result.summary,
+            result.summarized_turns,
+        )
 
     def status_event(self, status: str) -> dict[str, Any]:
         """Create a normalized agent status event for frontend consumers."""

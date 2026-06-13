@@ -9,19 +9,6 @@ services:
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant-data:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
   backend:
     build:
       context: ./backend
@@ -32,13 +19,10 @@ services:
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-dev-auth-secret-at-least-32-bytes-change-me}
       AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
       HARNESS_MEMORY_MAX_ITEMS: ${HARNESS_MEMORY_MAX_ITEMS:-20}
-      MEMORY_BACKEND: ${MEMORY_BACKEND:-local_jsonl}
-      MEM0_API_KEY: ${MEM0_API_KEY:-}
-      MEM0_HOST: ${MEM0_HOST:-}
-      MEM0_LOCAL_CONFIG_JSON: ${MEM0_LOCAL_CONFIG_JSON:-}
-      MEM0_AGENT_ID: ${MEM0_AGENT_ID:-sighttalk}
-      MEM0_SEARCH_LIMIT: ${MEM0_SEARCH_LIMIT:-5}
-      MEM0_SEARCH_THRESHOLD: ${MEM0_SEARCH_THRESHOLD:-0.3}
+      MEMORY_BACKEND: ${MEMORY_BACKEND:-local_markdown}
+      MEMORY_AGENT_ID: ${MEMORY_AGENT_ID:-sighttalk}
+      MEMORY_SEARCH_LIMIT: ${MEMORY_SEARCH_LIMIT:-5}
+      MEMORY_SEARCH_THRESHOLD: ${MEMORY_SEARCH_THRESHOLD:-0.3}
       SHORT_MEMORY_MAX_MESSAGES: ${SHORT_MEMORY_MAX_MESSAGES:-24}
       SHORT_MEMORY_MAX_ESTIMATED_TOKENS: ${SHORT_MEMORY_MAX_ESTIMATED_TOKENS:-8000}
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
@@ -71,8 +55,6 @@ services:
     depends_on:
       livekit:
         condition: service_started
-      qdrant:
-        condition: service_healthy
 
   frontend:
     build:
@@ -86,4 +68,3 @@ services:
 
 volumes:
   backend-data:
-  qdrant-data:
