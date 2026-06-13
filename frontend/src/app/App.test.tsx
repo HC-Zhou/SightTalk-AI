@@ -154,8 +154,8 @@ describe('App', () => {
     render(<App />);
 
     expect(screen.getByRole('heading', { name: '视频对话助手' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始对话' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '开始' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '开始对话' })).not.toBeInTheDocument();
     expect(screen.queryByText('语音提问')).not.toBeInTheDocument();
     expect(screen.queryByText('发送')).not.toBeInTheDocument();
     expect(screen.queryByText('Accurate')).not.toBeInTheDocument();
@@ -170,7 +170,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: '开始对话' }));
+    await user.click(screen.getByRole('button', { name: '开始' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
     expect(fetch).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: '开始对话' }));
+    await user.click(screen.getByRole('button', { name: '开始' }));
 
     expect(await screen.findByText('Listening')).toBeInTheDocument();
     const room = await latestRoom();
@@ -210,7 +210,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: '开始对话' }));
+    await user.click(screen.getByRole('button', { name: '开始' }));
     const room = await latestRoom();
     const audioElement = document.createElement('audio');
     const pause = vi.spyOn(audioElement, 'pause').mockImplementation(() => undefined);
@@ -239,7 +239,7 @@ describe('App', () => {
       });
     });
 
-    await waitFor(() => expect(screen.getAllByText('桌上有什么？').length).toBeGreaterThan(0));
+    expect(screen.queryByText('桌上有什么？')).not.toBeInTheDocument();
     expect(screen.getAllByText('我看到桌面中央有一个杯子。').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: '打断' }));
@@ -273,7 +273,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: '开始对话' }));
+    await user.click(screen.getByRole('button', { name: '开始' }));
     await user.click(await screen.findByRole('button', { name: '结束' }));
 
     await waitFor(() => expect(audio.stop).toHaveBeenCalled());
