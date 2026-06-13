@@ -66,7 +66,6 @@ export function App() {
         muted
         playsInline
       />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/45 via-white/10 to-white/65" />
 
       {!session.localPreviewStream && (
         <section
