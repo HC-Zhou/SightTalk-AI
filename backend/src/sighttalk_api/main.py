@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from sighttalk_api.api.v1.assistant import router as assistant_router
+from sighttalk_api.api.v1.auth import router as auth_router
 from sighttalk_api.api.v1.health import router as health_router
 from sighttalk_api.api.v1.livekit import router as livekit_router
 from sighttalk_api.core.config import get_settings
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(assistant_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(health_router, prefix="/api/v1")
     app.include_router(livekit_router, prefix="/api/v1")
     return app

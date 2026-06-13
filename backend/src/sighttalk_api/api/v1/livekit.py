@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from sighttalk_api.agent.livekit_runtime import get_agent_manager
+from sighttalk_api.api.deps import get_current_user
 from sighttalk_api.core.config import Settings, get_settings
 from sighttalk_api.core.errors import AppError
 from sighttalk_api.schemas.livekit import (
@@ -14,6 +15,7 @@ from sighttalk_api.schemas.livekit import (
     EndLiveKitSessionRequest,
     EndLiveKitSessionResponse,
 )
+from sighttalk_api.services.auth import StoredUser
 from sighttalk_api.services.livekit_messenger import LiveKitMessenger
 from sighttalk_api.services.livekit_rooms import LiveKitRoomService
 from sighttalk_api.services.livekit_tokens import LiveKitTokenService
@@ -31,6 +33,7 @@ def _make_identity(prefix: str) -> str:
 async def create_session(
     request: CreateLiveKitSessionRequest,
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> CreateLiveKitSessionResponse:
     try:
         settings.validate_for_session()
@@ -62,6 +65,7 @@ async def create_session(
     get_session_registry().put(
         SessionRecord(
             room_name=room_name,
+            user_id=current_user.user_id,
             participant_identity=participant_identity,
             assistant_identity=assistant_identity,
             expires_at=expires_at,
@@ -84,7 +88,11 @@ async def create_session(
 async def end_session(
     room_name: str,
     request: EndLiveKitSessionRequest,
+    current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> EndLiveKitSessionResponse:
+    record = get_session_registry().get(room_name)
+    if record is not None and record.user_id != current_user.user_id:
+        raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
     await get_agent_manager().stop(room_name)
     get_session_registry().remove(room_name, request.participant_identity)
     return EndLiveKitSessionResponse(status="ended", room_name=room_name)
@@ -94,9 +102,10 @@ async def end_session(
 async def start_agent_session(
     room_name: str,
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> dict[str, str]:
     record = get_session_registry().get(room_name)
-    if record is None:
+    if record is None or record.user_id != current_user.user_id:
         raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
 
     messenger = LiveKitMessenger(
@@ -121,6 +130,7 @@ async def start_agent_session(
         assistant_token=assistant_token,
         settings=settings,
         media_policy=record.media_policy,
+        user_id=record.user_id,
     )
     await messenger.send_json(
         room_name=room_name,
@@ -164,6 +174,7 @@ async def start_agent_session(
 async def send_mock_events(
     room_name: str,
     settings: Annotated[Settings, Depends(get_settings)],
+    current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> dict[str, str]:
     if settings.ai_provider != "mock":
         raise AppError(
@@ -171,7 +182,7 @@ async def send_mock_events(
             "Mock events are only available for AI_PROVIDER=mock",
         )
     record = get_session_registry().get(room_name)
-    if record is None:
+    if record is None or record.user_id != current_user.user_id:
         raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
 
     messenger = LiveKitMessenger(

@@ -199,12 +199,18 @@ class BailianRealtimeProvider(AIProvider):
         if event_type in {
             "response.text.delta",
             "response.audio_transcript.delta",
-            "response.audio_transcript.done",
         }:
             return ProviderEvent(
                 type="transcript_delta",
                 speaker="assistant",
                 text=text or str(payload.get("delta", "")) or str(payload.get("transcript", "")),
+                message_id=message_id,
+            )
+        if event_type in {"response.audio_transcript.done", "response.text.done"}:
+            return ProviderEvent(
+                type="transcript_done",
+                speaker="assistant",
+                text=text or str(payload.get("transcript", "")) or str(payload.get("delta", "")),
                 message_id=message_id,
             )
         if event_type in {"response.audio.delta", "response.output_audio.delta"}:

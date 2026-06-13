@@ -2,144 +2,96 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
-import json
-from datetime import UTC, datetime
 from typing import Any
 
-from sighttalk_api.agent.media_policy import derive_mode_policy
-from sighttalk_api.core.config import get_settings
-from sighttalk_api.providers.base import (
-    AIProvider,
-    AudioChunk,
-    ControlEvent,
-    ProviderEvent,
-    ProviderSessionConfig,
-)
+from sighttalk_api.agent.context import AgentSessionContext
+from sighttalk_api.agent.tooling import AgentTooling
+from sighttalk_api.core.config import Settings, get_settings
+from sighttalk_api.providers.base import AIProvider, ProviderEvent
 from sighttalk_api.providers.factory import create_provider
 from sighttalk_api.schemas.livekit import MediaPolicy
+from sighttalk_api.services.memory import MemoryStore
 
 AGENT_TOPIC = "sighttalk.agent"
 CONTROL_TOPIC = "sighttalk.control"
 
 
-def utc_now() -> str:
-    return datetime.now(tz=UTC).isoformat()
-
-
 class AgentSession:
-    def __init__(self, *, session_id: str, provider: AIProvider, media_policy: MediaPolicy) -> None:
-        self.session_id = session_id
-        self.provider = provider
-        self.media_policy = media_policy
-        self.audio_seconds = 0.0
-        self.image_frames_sent = 0
-
-    async def start(self) -> None:
-        settings = get_settings()
-        await self.provider.connect(
-            ProviderSessionConfig(
-                session_id=self.session_id,
-                model=settings.bailian_model,
-                workspace_id=settings.bailian_workspace_id,
-                system_prompt=(
-                    "You are SightTalk AI, a concise visual voice assistant. "
-                    "Use camera context when it is available and be clear when it is not."
-                ),
-            )
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        provider: AIProvider,
+        media_policy: MediaPolicy,
+        user_id: str = "standalone-agent",
+        memory_store: MemoryStore | None = None,
+        memory_max_items: int = 20,
+        settings: Settings | None = None,
+    ) -> None:
+        self.context = AgentSessionContext(
+            session_id=session_id,
+            user_id=user_id,
+            media_policy=media_policy,
+            memory_store=memory_store,
+            memory_max_items=memory_max_items,
+        )
+        self.tooling = AgentTooling(
+            provider=provider,
+            context=self.context,
+            settings=settings or get_settings(),
         )
 
+    @property
+    def session_id(self) -> str:
+        return self.context.session_id
+
+    @property
+    def provider(self) -> AIProvider:
+        return self.tooling.provider
+
+    @property
+    def media_policy(self) -> MediaPolicy:
+        return self.context.media_policy
+
+    @media_policy.setter
+    def media_policy(self, value: MediaPolicy) -> None:
+        self.context.media_policy = value
+
+    @property
+    def audio_seconds(self) -> float:
+        return self.context.audio_seconds
+
+    @property
+    def image_frames_sent(self) -> int:
+        return self.context.image_frames_sent
+
+    @image_frames_sent.setter
+    def image_frames_sent(self, value: int) -> None:
+        self.context.image_frames_sent = value
+
+    async def start(self) -> None:
+        await self.tooling.connect()
+
     async def handle_audio(self, data: bytes, *, sample_rate: int = 16_000) -> None:
-        self.audio_seconds += len(data) / max(sample_rate * 2, 1)
-        await self.provider.send_audio(AudioChunk(data=data, sample_rate=sample_rate))
+        await self.tooling.send_audio(data, sample_rate=sample_rate)
 
     async def handle_control_message(self, raw: str | bytes) -> dict[str, Any] | None:
-        try:
-            payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
-        except json.JSONDecodeError:
-            return self.error_event("MALFORMED_CONTROL_EVENT", "Malformed control event")
-
-        event_type = payload.get("type")
-        if event_type == "client.mode.update":
-            mode = payload.get("mode")
-            if mode in ("economy", "balanced", "accurate"):
-                self.media_policy = derive_mode_policy(self.media_policy, mode)
-                await self.provider.send_control(ControlEvent(type="mode_update", value=mode))
-                return self.cost_event()
-            return self.error_event("INVALID_MEDIA_MODE", "Unsupported media mode")
-        if event_type == "client.interrupt":
-            await self.provider.send_control(ControlEvent(type="interrupt"))
-            return self.status_event("listening")
-        return None
+        return await self.tooling.handle_control_message(raw)
 
     def map_provider_event(self, event: ProviderEvent) -> dict[str, Any] | None:
-        base: dict[str, Any] = {
-            "session_id": self.session_id,
-            "timestamp": utc_now(),
-        }
-        if event.type == "status":
-            return {**base, "type": "agent.status", "status": event.status}
-        if event.type == "transcript_delta":
-            return {
-                **base,
-                "type": "transcript.delta",
-                "speaker": event.speaker,
-                "text": event.text,
-                "message_id": event.message_id,
-            }
-        if event.type == "transcript_done":
-            return {
-                **base,
-                "type": "transcript.done",
-                "speaker": event.speaker,
-                "text": event.text,
-                "message_id": event.message_id,
-            }
-        if event.type == "response_done":
-            return {
-                **base,
-                "type": "response.done",
-                "message_id": event.message_id,
-                "audio_playback_complete": False,
-            }
-        if event.type == "audio_delta":
-            return {
-                **base,
-                "type": "audio.delta",
-                "message_id": event.message_id,
-                "mime_type": event.mime_type,
-                "audio": base64.b64encode(event.audio).decode("ascii"),
-            }
-        if event.type == "error":
-            return {**base, "type": "error", "code": event.code, "message": event.message}
-        return None
+        return self.tooling.map_provider_event(event)
+
+    async def handle_provider_event(self, event: ProviderEvent) -> dict[str, Any] | None:
+        return await self.tooling.handle_provider_event(event)
 
     def status_event(self, status: str) -> dict[str, Any]:
-        return {
-            "type": "agent.status",
-            "session_id": self.session_id,
-            "timestamp": utc_now(),
-            "status": status,
-        }
+        return self.context.status_event(status)
 
     def cost_event(self) -> dict[str, Any]:
-        return {
-            "type": "cost.estimate",
-            "session_id": self.session_id,
-            "timestamp": utc_now(),
-            "audio_seconds": round(self.audio_seconds, 2),
-            "image_frames_sent": self.image_frames_sent,
-            "mode": self.media_policy.mode,
-        }
+        return self.context.cost_event()
 
     def error_event(self, code: str, message: str) -> dict[str, Any]:
-        return {
-            "type": "error",
-            "session_id": self.session_id,
-            "timestamp": utc_now(),
-            "code": code,
-            "message": message,
-        }
+        return self.context.error_event(code, message)
 
 
 async def run_agent_worker() -> None:

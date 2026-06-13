@@ -10,6 +10,7 @@ from sighttalk_api.schemas.livekit import MediaPolicy
 @dataclass(frozen=True)
 class SessionRecord:
     room_name: str
+    user_id: str
     participant_identity: str
     assistant_identity: str
     expires_at: datetime

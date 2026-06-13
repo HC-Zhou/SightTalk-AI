@@ -247,3 +247,21 @@ def test_bailian_maps_nested_error() -> None:
     assert event.type == "error"
     assert event.code == "invalid_request_error"
     assert event.message == "Invalid payload"
+
+
+def test_bailian_maps_assistant_audio_transcript_done_as_final_text() -> None:
+    provider = make_provider()
+
+    event = provider._map_event(  # noqa: SLF001
+        {
+            "type": "response.audio_transcript.done",
+            "response_id": "assistant-1",
+            "transcript": "完整回答",
+        }
+    )
+
+    assert event is not None
+    assert event.type == "transcript_done"
+    assert event.speaker == "assistant"
+    assert event.text == "完整回答"
+    assert event.message_id == "assistant-1"
