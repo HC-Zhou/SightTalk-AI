@@ -15,6 +15,10 @@ services:
     environment:
       APP_ENV: development
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      SIGHTTALK_DATA_DIR: /app/data
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-dev-auth-secret-change-me}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
+      HARNESS_MEMORY_MAX_ITEMS: ${HARNESS_MEMORY_MAX_ITEMS:-20}
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://localhost:7880}
       LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-ws://livekit:7880}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
@@ -33,6 +37,8 @@ services:
       BAILIAN_TURN_SILENCE_DURATION_MS: ${BAILIAN_TURN_SILENCE_DURATION_MS:-2000}
     ports:
       - "8000:8000"
+    volumes:
+      - backend-data:/app/data
     depends_on:
       - livekit
 
@@ -45,3 +51,6 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+volumes:
+  backend-data:

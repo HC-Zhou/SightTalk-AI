@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from sighttalk_api.agent.context import BASE_SYSTEM_PROMPT, AgentSessionContext
+from sighttalk_api.schemas.livekit import MediaPolicy
+from sighttalk_api.services.memory import MemoryRecord, MemoryStore
+
+
+def make_policy() -> MediaPolicy:
+    return MediaPolicy(
+        mode="balanced",
+        max_video_fps=1.0,
+        max_jpeg_edge=1024,
+        jpeg_quality=75,
+        vad_enabled=True,
+    )
+
+
+def test_memory_store_isolates_users_and_limits_recent_items(tmp_path) -> None:
+    store = MemoryStore(tmp_path)
+    now = datetime.now(tz=UTC)
+    for index in range(5):
+        store.append(
+            MemoryRecord(
+                user_id="user_1",
+                session_id=f"session-{index}",
+                timestamp=now + timedelta(seconds=index),
+                speaker="user",
+                text=f"memory {index}",
+            )
+        )
+    store.append(
+        MemoryRecord(
+            user_id="user_2",
+            session_id="session-other",
+            timestamp=now,
+            speaker="assistant",
+            text="other user memory",
+        )
+    )
+
+    records = store.recent(user_id="user_1", limit=3)
+
+    assert [record.text for record in records] == ["memory 2", "memory 3", "memory 4"]
+    assert all(record.user_id == "user_1" for record in records)
+
+
+def test_memory_store_ignores_malformed_lines(tmp_path) -> None:
+    store = MemoryStore(tmp_path)
+    store.append(
+        MemoryRecord(
+            user_id="user_1",
+            session_id="session-1",
+            timestamp=datetime.now(tz=UTC),
+            speaker="user",
+            text="valid memory",
+        )
+    )
+    path = tmp_path / "memory" / "user_1.jsonl"
+    with path.open("a", encoding="utf-8") as file:
+        file.write("{bad-json\n")
+
+    records = store.recent(user_id="user_1", limit=10)
+
+    assert [record.text for record in records] == ["valid memory"]
+
+
+def test_context_prompt_injects_memory_only_when_present(tmp_path) -> None:
+    store = MemoryStore(tmp_path)
+    empty_context = AgentSessionContext(
+        session_id="room-1",
+        user_id="user_1",
+        media_policy=make_policy(),
+        memory_store=store,
+        memory_max_items=3,
+    )
+
+    assert empty_context.build_system_prompt() == BASE_SYSTEM_PROMPT
+
+    store.append(
+        MemoryRecord(
+            user_id="user_1",
+            session_id="old-room",
+            timestamp=datetime.now(tz=UTC),
+            speaker="user",
+            text="My desk lamp is blue.",
+        )
+    )
+
+    prompt = empty_context.build_system_prompt()
+
+    assert BASE_SYSTEM_PROMPT in prompt
+    assert "User memory from previous SightTalk sessions" in prompt
+    assert "My desk lamp is blue." in prompt
+
+
+def test_context_flushes_final_transcripts_once(tmp_path) -> None:
+    store = MemoryStore(tmp_path)
+    context = AgentSessionContext(
+        session_id="room-1",
+        user_id="user_1",
+        media_policy=make_policy(),
+        memory_store=store,
+        memory_max_items=10,
+    )
+    context.record_transcript(
+        speaker="user",
+        text="hello",
+        message_id="message-1",
+        final=True,
+    )
+
+    assert context.flush_memory() == 1
+    assert context.flush_memory() == 0
+    assert [record.text for record in store.recent(user_id="user_1", limit=10)] == ["hello"]
+
+
+def test_context_does_not_flush_empty_or_unfinalized_text(tmp_path) -> None:
+    store = MemoryStore(tmp_path)
+    context = AgentSessionContext(
+        session_id="room-1",
+        user_id="user_1",
+        media_policy=make_policy(),
+        memory_store=store,
+        memory_max_items=10,
+    )
+    context.record_transcript(
+        speaker="assistant",
+        text="",
+        message_id="empty",
+        final=True,
+    )
+    context.record_transcript(
+        speaker="assistant",
+        text="partial",
+        message_id="partial",
+        final=False,
+    )
+
+    assert context.flush_memory() == 0
+    assert store.recent(user_id="user_1", limit=10) == []

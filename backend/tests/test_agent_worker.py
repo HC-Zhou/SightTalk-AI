@@ -95,6 +95,15 @@ async def test_agent_handles_interrupt() -> None:
     assert payload["status"] == "listening"
 
 
+async def test_agent_audio_updates_cost_counter() -> None:
+    session = make_session()
+
+    await session.handle_audio(b"\0" * 32_000, sample_rate=16_000)
+
+    payload = session.cost_event()
+    assert payload["audio_seconds"] == 1.0
+
+
 async def test_mock_provider_emits_events() -> None:
     provider = MockRealtimeProvider()
     await provider.connect(

@@ -98,8 +98,40 @@ function createStream() {
 }
 
 function mockSessionFetch() {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/api/v1/auth/login') || url.endsWith('/api/v1/auth/register')) {
+      return new Response(
+        JSON.stringify({
+          user: {
+            user_id: 'user-test',
+            email: 'ada@example.com',
+            created_at: '2026-06-13T12:00:00Z',
+          },
+          access_token: 'auth-token',
+          token_type: 'bearer',
+          expires_at: '2026-06-20T12:00:00Z',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    if (url.endsWith('/api/v1/auth/me')) {
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.Authorization !== 'Bearer auth-token') {
+        return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          user_id: 'user-test',
+          email: 'ada@example.com',
+          created_at: '2026-06-13T12:00:00Z',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
     if (url.endsWith('/api/v1/livekit/session')) {
       return new Response(
         JSON.stringify({
@@ -138,23 +170,42 @@ async function latestRoom() {
   return module.__mockRooms[module.__mockRooms.length - 1];
 }
 
+async function signIn(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByLabelText('邮箱'), 'ada@example.com');
+  await user.type(screen.getByLabelText('密码'), 'correct-horse');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  expect(await screen.findByRole('button', { name: '开始' })).toBeInTheDocument();
+}
+
 beforeEach(async () => {
   const module = (await import('livekit-client')) as unknown as LiveKitMockModule;
   module.__mockRooms.length = 0;
+  localStorage.clear();
   vi.stubGlobal('fetch', mockSessionFetch());
 });
 
 afterEach(() => {
+  localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('App', () => {
-  it('renders automatic conversation entry without manual turn controls', () => {
+  it('renders login/register interface before authentication', () => {
     render(<App />);
 
+    expect(screen.getByRole('heading', { name: '登录后开始' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '开始' })).not.toBeInTheDocument();
+  });
+
+  it('logs in and renders automatic conversation entry without manual turn controls', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await signIn(user);
+
     expect(screen.getByRole('heading', { name: '视频对话助手' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '开始对话' })).not.toBeInTheDocument();
     expect(screen.queryByText('语音提问')).not.toBeInTheDocument();
     expect(screen.queryByText('发送')).not.toBeInTheDocument();
@@ -169,11 +220,15 @@ describe('App', () => {
     });
     const user = userEvent.setup();
     render(<App />);
+    await signIn(user);
 
     await user.click(screen.getByRole('button', { name: '开始' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/livekit/session',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('starts LiveKit and automatically starts the backend agent', async () => {
@@ -185,6 +240,7 @@ describe('App', () => {
     });
     const user = userEvent.setup();
     render(<App />);
+    await signIn(user);
 
     await user.click(screen.getByRole('button', { name: '开始' }));
 
@@ -192,10 +248,20 @@ describe('App', () => {
     const room = await latestRoom();
     expect(room.connect).toHaveBeenCalledWith('ws://localhost:7880', 'token');
     expect(room.localParticipant.publishTrack).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/livekit/session',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
+      }),
+    );
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
         'http://localhost:8000/api/v1/livekit/session/sighttalk-test/agent/start',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
+        }),
       ),
     );
   });
@@ -209,6 +275,7 @@ describe('App', () => {
     });
     const user = userEvent.setup();
     render(<App />);
+    await signIn(user);
 
     await user.click(screen.getByRole('button', { name: '开始' }));
     const room = await latestRoom();
@@ -226,7 +293,7 @@ describe('App', () => {
         session_id: 'sighttalk-test',
         timestamp: new Date().toISOString(),
         speaker: 'user',
-        text: '桌上有什么？',
+        text: '第一轮问题',
         message_id: 'user-1',
       });
       room.emitData({
@@ -234,13 +301,49 @@ describe('App', () => {
         session_id: 'sighttalk-test',
         timestamp: new Date().toISOString(),
         speaker: 'assistant',
-        text: '我看到桌面中央有一个杯子。',
+        text: '第一轮回答',
         message_id: 'assistant-1',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'user',
+        text: '第二轮问题',
+        message_id: 'user-2',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '第二轮回答',
+        message_id: 'assistant-2',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'user',
+        text: '第三轮问题',
+        message_id: 'user-3',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '第三轮回答',
+        message_id: 'assistant-3',
       });
     });
 
-    expect(screen.queryByText('桌上有什么？')).not.toBeInTheDocument();
-    expect(screen.getAllByText('我看到桌面中央有一个杯子。').length).toBeGreaterThan(0);
+    expect(screen.queryByText('第一轮问题')).not.toBeInTheDocument();
+    expect(screen.queryByText('第一轮回答')).not.toBeInTheDocument();
+    expect(screen.getByText('第二轮问题')).toBeInTheDocument();
+    expect(screen.getByText('第二轮回答')).toBeInTheDocument();
+    expect(screen.getByText('第三轮问题')).toBeInTheDocument();
+    expect(screen.getByText('第三轮回答')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '打断' }));
 
@@ -255,10 +358,20 @@ describe('App', () => {
         timestamp: new Date().toISOString(),
         speaker: 'assistant',
         text: '新的回答',
-        message_id: 'assistant-2',
+        message_id: 'assistant-4',
+      });
+      room.emitData({
+        type: 'transcript.delta',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '新的回答',
+        message_id: 'assistant-4',
       });
     });
 
+    expect(screen.getByText('新的回答')).toBeInTheDocument();
+    expect(screen.queryByText('新的回答新的回答')).not.toBeInTheDocument();
     expect(audioElement.muted).toBe(false);
     expect(play).toHaveBeenCalled();
   });
@@ -272,6 +385,7 @@ describe('App', () => {
     });
     const user = userEvent.setup();
     render(<App />);
+    await signIn(user);
 
     await user.click(screen.getByRole('button', { name: '开始' }));
     await user.click(await screen.findByRole('button', { name: '结束' }));
@@ -280,7 +394,28 @@ describe('App', () => {
     expect(video.stop).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledWith(
       'http://localhost:8000/api/v1/livekit/session/sighttalk-test/end',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
+      }),
     );
+  });
+
+  it('registers and logs out by clearing the stored token', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '没有账号，去注册' }));
+    await user.type(screen.getByLabelText('邮箱'), 'ada@example.com');
+    await user.type(screen.getByLabelText('密码'), 'correct-horse');
+    await user.click(screen.getByRole('button', { name: '注册账号' }));
+
+    expect(await screen.findByRole('button', { name: '开始' })).toBeInTheDocument();
+    expect(localStorage.getItem('sighttalk.auth.token')).toBe('auth-token');
+
+    await user.click(screen.getByRole('button', { name: '登出' }));
+
+    expect(localStorage.getItem('sighttalk.auth.token')).toBeNull();
+    expect(await screen.findByRole('button', { name: '登录' })).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator
@@ -16,9 +17,13 @@ class Settings(BaseSettings):
     app_env: str = "development"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    sighttalk_data_dir: Path = Path("data")
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173"]
     )
+    auth_secret_key: str = "dev-auth-secret-change-me"
+    auth_token_ttl_seconds: int = 604_800
+    harness_memory_max_items: int = 20
 
     livekit_url: str = "ws://localhost:7880"
     livekit_server_url: str | None = None

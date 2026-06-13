@@ -44,7 +44,7 @@ const initialState: SightTalkState = {
 
 type PublishData = (payload: Uint8Array, options: { reliable: boolean; topic: string }) => void;
 
-export function useSightTalkSession() {
+export function useSightTalkSession(authToken?: string) {
   const [state, setState] = useState<SightTalkState>(initialState);
   const roomRef = useRef<Room | undefined>(undefined);
   const sessionRef = useRef<CreateLiveKitSessionResponse | undefined>(undefined);
@@ -76,8 +76,7 @@ export function useSightTalkSession() {
   const mergeMessage = useCallback((event: Extract<RealtimeEvent, { text: string }>) => {
     setState((current) => {
       const existing = current.messages.find((message) => message.id === event.message_id);
-      const text =
-        existing && event.type === 'transcript.delta' ? `${existing.text}${event.text}` : event.text;
+      const text = mergeTranscriptText(existing?.text, event.text, event.type);
       const nextMessage: ConversationMessage = {
         id: event.message_id,
         speaker: event.speaker,
@@ -171,23 +170,30 @@ export function useSightTalkSession() {
       room.disconnect();
     }
     stopMedia();
-    if (session) {
+    if (session && authToken) {
       try {
-        await endLiveKitSession(session.room_name, {
-          participant_identity: session.participant_identity,
-        });
+        await endLiveKitSession(
+          session.room_name,
+          {
+            participant_identity: session.participant_identity,
+          },
+          authToken,
+        );
       } catch {
         // Stop must always release local resources even if backend cleanup fails.
       }
     }
-  }, [handleDataReceived, stopMedia]);
+  }, [authToken, handleDataReceived, stopMedia]);
 
   const start = useCallback(async () => {
     setState((current) => ({ ...current, status: 'requesting-permission', error: undefined }));
     try {
+      if (!authToken) {
+        throw new Error('Please sign in before starting a session');
+      }
       const localStream = await requestMedia();
       setState((current) => ({ ...current, status: 'connecting' }));
-      const session = await createLiveKitSession({ media_mode: state.mediaMode });
+      const session = await createLiveKitSession({ media_mode: state.mediaMode }, authToken);
       const room = new Room();
       roomRef.current = room;
       sessionRef.current = session;
@@ -215,7 +221,7 @@ export function useSightTalkSession() {
       await Promise.all(
         localStream.getTracks().map((track) => room.localParticipant.publishTrack(track)),
       );
-      void startLiveKitAgentSession(session.room_name).catch(() => {
+      void startLiveKitAgentSession(session.room_name, authToken).catch(() => {
         // Real provider sessions may publish their own initial status; this helper is non-critical.
       });
       setState((current) => ({
@@ -235,7 +241,7 @@ export function useSightTalkSession() {
         },
       }));
     }
-  }, [handleDataReceived, requestMedia, state.mediaMode, stopMedia]);
+  }, [authToken, handleDataReceived, requestMedia, state.mediaMode, stopMedia]);
 
   const stop = useCallback(async () => {
     await cleanup();
@@ -296,6 +302,23 @@ export function useSightTalkSession() {
     toggleMic,
     toggleCamera,
   };
+}
+
+function mergeTranscriptText(
+  existingText: string | undefined,
+  incomingText: string,
+  eventType: 'transcript.delta' | 'transcript.done',
+) {
+  if (!existingText || eventType === 'transcript.done') {
+    return incomingText;
+  }
+  if (incomingText === existingText) {
+    return existingText;
+  }
+  if (incomingText.startsWith(existingText)) {
+    return incomingText;
+  }
+  return `${existingText}${incomingText}`;
 }
 
 export function statusLabel(status: SessionStatus | AgentStatus): string {
