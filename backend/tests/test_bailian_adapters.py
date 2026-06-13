@@ -6,6 +6,7 @@ from sighttalk_api.ai.bailian_adapters import (
     AsyncHttpClient,
     BailianAsrAdapter,
     BailianMultimodalAdapter,
+    BailianTtsAdapter,
     HttpResponse,
     _audio_chunks_to_data_url,
     _extract_chat_content,
@@ -216,3 +217,46 @@ async def test_bailian_multimodal_returns_fallback_without_keyframes() -> None:
 
     assert result.answer == "我听到了问题，但当前没有可用画面。"
     assert client.posts == []
+
+
+async def test_bailian_tts_decodes_inline_audio_data() -> None:
+    audio_data = base64.b64encode(b"wav-bytes").decode()
+    client = FakeAsyncClient([FakeResponse({"output": {"audio": {"data": audio_data}}})])
+    adapter = BailianTtsAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.synthesize("你好")
+
+    assert result.audio_bytes == b"wav-bytes"
+    assert result.mime == "audio/wav"
+    body = client.posts[0]["json"]
+    assert body == {
+        "model": "cosyvoice-v3-flash",
+        "input": {"text": "你好"},
+        "parameters": {
+            "voice": "longanyang",
+            "format": "wav",
+            "sample_rate": 24000,
+        },
+    }
+
+
+async def test_bailian_tts_downloads_audio_url() -> None:
+    client = FakeAsyncClient(
+        [
+            FakeResponse({"output": {"audio": {"url": "https://example.com/audio.wav"}}}),
+            FakeResponse(b"downloaded-wav", content_type="audio/wav"),
+        ]
+    )
+    adapter = BailianTtsAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.synthesize("你好")
+
+    assert client.gets == ["https://example.com/audio.wav"]
+    assert result.audio_bytes == b"downloaded-wav"
+    assert result.mime == "audio/wav"

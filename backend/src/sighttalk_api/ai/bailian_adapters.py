@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from sighttalk_api.ai.adapters import AsrResult, MultimodalResult
+from sighttalk_api.ai.adapters import AsrResult, MultimodalResult, TtsResult
 from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
 from sighttalk_api.media.frame_buffer import FrameItem
@@ -87,6 +87,24 @@ def _frame_to_image_content(frame: FrameItem) -> JsonObject:
             "url": f"data:{mime};base64,{frame.data}",
         },
     }
+
+
+def _audio_mime(format_name: str) -> str:
+    if format_name == "mp3":
+        return "audio/mpeg"
+    if format_name == "pcm":
+        return "audio/pcm"
+    return f"audio/{format_name}"
+
+
+def _extract_tts_audio(payload: JsonObject) -> JsonObject:
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        raise ValueError("Bailian TTS response missing output.")
+    audio = output.get("audio")
+    if not isinstance(audio, dict):
+        raise ValueError("Bailian TTS response missing output.audio.")
+    return audio
 
 
 class BailianAsrAdapter:
@@ -179,3 +197,47 @@ class BailianMultimodalAdapter:
         )
         response.raise_for_status()
         return MultimodalResult(answer=_extract_chat_content(response.json()))
+
+
+class BailianTtsAdapter:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        http_client: AsyncHttpClient | None = None,
+    ) -> None:
+        self.settings = settings
+        self.api_key = _require_api_key(settings)
+        self.client = http_client or httpx.AsyncClient(
+            timeout=settings.bailian_timeout_seconds
+        )
+
+    async def synthesize(self, text: str) -> TtsResult:
+        response = await self.client.post(
+            self.settings.bailian_tts_endpoint,
+            headers=_authorization_headers(self.api_key),
+            json={
+                "model": self.settings.bailian_tts_model,
+                "input": {"text": text},
+                "parameters": {
+                    "voice": self.settings.bailian_tts_voice,
+                    "format": self.settings.bailian_tts_format,
+                    "sample_rate": self.settings.bailian_tts_sample_rate,
+                },
+            },
+        )
+        response.raise_for_status()
+        audio = _extract_tts_audio(response.json())
+        mime = _audio_mime(self.settings.bailian_tts_format)
+
+        audio_data = audio.get("data")
+        if isinstance(audio_data, str) and audio_data:
+            return TtsResult(audio_bytes=base64.b64decode(audio_data), mime=mime)
+
+        audio_url = audio.get("url")
+        if isinstance(audio_url, str) and audio_url:
+            download = await self.client.get(audio_url)
+            download.raise_for_status()
+            return TtsResult(audio_bytes=download.content, mime=mime)
+
+        raise ValueError("Bailian TTS response missing audio data or audio url.")
