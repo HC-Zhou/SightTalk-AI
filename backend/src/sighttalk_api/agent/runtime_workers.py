@@ -16,6 +16,7 @@ from sighttalk_api.agent.short_term_context import (
     MemoryContextItem,
     ShortTermContext,
     Speaker,
+    SummaryResult,
 )
 from sighttalk_api.providers.base import ProviderContext
 from sighttalk_api.services.long_term_memory import (
@@ -93,13 +94,13 @@ class ContextWorker(BaseWorker):
         """Build provider context from short-term state and retrieved memory."""
         return self._builder.build_prompt(self.context, memories=memories)
 
-    async def summarize_if_needed(self) -> bool:
+    async def summarize_if_needed(self) -> SummaryResult | None:
         """Summarize context if configured limits are exceeded."""
         if not self.context.needs_summarization():
-            return False
+            return None
         result = await self._summarizer.summarize(self.context)
         self.context.apply_summary(result)
-        return True
+        return result
 
     async def handle_frame(self, frame: Frame) -> Sequence[Frame]:
         """Process transcript/context frames for bus-based runtime paths."""
@@ -193,6 +194,22 @@ class MemoryWorker(BaseWorker):
                 continue
             written += 1
         return written
+
+    async def add_short_term_summary(self, summary: str, turns: Sequence[ConversationTurn]) -> None:
+        """Persist a short-term consolidation summary when the backend supports it."""
+        add_summary = getattr(self.memory, "add_short_term_summary", None)
+        if not callable(add_summary):
+            return
+        turn_ids = [turn.turn_id for turn in turns]
+        metadata = {
+            "session_id": self.scope.run_id,
+            "turn_ids": turn_ids,
+            "source": "sighttalk_short_context_consolidation",
+        }
+        try:
+            await add_summary(self.scope, summary, metadata)
+        except Exception as exc:
+            self.last_error = str(exc)
 
     async def handle_frame(self, frame: Frame) -> Sequence[Frame]:
         """Process long-term memory frames."""

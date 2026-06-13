@@ -13,7 +13,7 @@ from sighttalk_api.schemas.livekit import MediaMode, MediaPolicy
 
 DEFAULT_BAILIAN_REALTIME_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_BAILIAN_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-MemoryBackend = Literal["local_jsonl", "mem0", "disabled"]
+MemoryBackend = Literal["nanobot", "local_jsonl", "mem0", "disabled"]
 
 
 class Settings(BaseSettings):
@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     auth_secret_key: str = "dev-auth-secret-change-me"
     auth_token_ttl_seconds: int = 604_800
     harness_memory_max_items: int = 20
-    memory_backend: MemoryBackend = "local_jsonl"
+    memory_backend: MemoryBackend = "nanobot"
+    memory_agent_id: str = "sighttalk"
+    memory_search_limit: int = 5
+    memory_search_threshold: float = 0.3
     mem0_api_key: str = ""
     mem0_host: str = ""
     mem0_local_config_json: str = ""

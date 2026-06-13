@@ -4,6 +4,11 @@ from datetime import UTC, datetime, timedelta
 
 from sighttalk_api.agent.context import BASE_SYSTEM_PROMPT, AgentSessionContext
 from sighttalk_api.schemas.livekit import MediaPolicy
+from sighttalk_api.services.long_term_memory import (
+    MemoryMessage,
+    MemoryScope,
+    NanobotMarkdownMemory,
+)
 from sighttalk_api.services.memory import MemoryRecord, MemoryStore
 
 
@@ -15,6 +20,10 @@ def make_policy() -> MediaPolicy:
         jpeg_quality=75,
         vad_enabled=True,
     )
+
+
+def make_scope(user_id: str = "user_1", run_id: str = "room-1") -> MemoryScope:
+    return MemoryScope(user_id=user_id, agent_id="sighttalk", run_id=run_id)
 
 
 def test_memory_store_isolates_users_and_limits_recent_items(tmp_path) -> None:
@@ -93,6 +102,58 @@ def test_context_prompt_injects_memory_only_when_present(tmp_path) -> None:
     assert BASE_SYSTEM_PROMPT in prompt
     assert "User memory from previous SightTalk sessions" in prompt
     assert "My desk lamp is blue." in prompt
+
+
+async def test_context_async_prompt_injects_nanobot_memory_without_query(tmp_path) -> None:
+    memory = NanobotMarkdownMemory(tmp_path)
+    await memory.add_turn(
+        make_scope("user_1"),
+        [MemoryMessage(role="user", content="请记住，我喜欢蓝色台灯。")],
+        {"session_id": "old-room", "turn_id": "turn-1"},
+    )
+    context = AgentSessionContext(
+        session_id="room-1",
+        user_id="user_1",
+        media_policy=make_policy(),
+        long_term_memory=memory,
+    )
+
+    prompt = await context.build_system_prompt_async()
+
+    assert "User memory from previous SightTalk sessions" in prompt
+    assert "请记住，我喜欢蓝色台灯。" in prompt
+
+
+async def test_context_consolidates_short_term_memory_to_nanobot_history(tmp_path) -> None:
+    memory = NanobotMarkdownMemory(tmp_path)
+    context = AgentSessionContext(
+        session_id="room-1",
+        user_id="user_1",
+        media_policy=make_policy(),
+        short_memory_max_messages=1,
+        long_term_memory=memory,
+    )
+    for index in range(6):
+        context.record_transcript(
+            speaker="user",
+            text=f"message {index}",
+            message_id=f"message-{index}",
+            final=True,
+        )
+
+    assert await context.flush_memory_async() == 6
+
+    history = (
+        tmp_path / "nanobot" / "sighttalk" / "user_1" / "HISTORY.md"
+    ).read_text(encoding="utf-8")
+    assert "sighttalk_short_context_consolidation" in history
+    assert "summary: user: message 0 user: message 1" in history
+    assert [turn.text for turn in context.context_worker.context.finalized_turns] == [
+        "message 2",
+        "message 3",
+        "message 4",
+        "message 5",
+    ]
 
 
 def test_context_flushes_final_transcripts_once(tmp_path) -> None:
