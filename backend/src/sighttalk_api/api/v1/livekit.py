@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
+from sighttalk_api.agent.livekit_runtime import get_agent_manager
 from sighttalk_api.core.config import Settings, get_settings
 from sighttalk_api.core.errors import AppError
 from sighttalk_api.schemas.livekit import (
@@ -84,8 +85,79 @@ async def end_session(
     room_name: str,
     request: EndLiveKitSessionRequest,
 ) -> EndLiveKitSessionResponse:
+    await get_agent_manager().stop(room_name)
     get_session_registry().remove(room_name, request.participant_identity)
     return EndLiveKitSessionResponse(status="ended", room_name=room_name)
+
+
+@router.post("/session/{room_name}/agent/start")
+async def start_agent_session(
+    room_name: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, str]:
+    record = get_session_registry().get(room_name)
+    if record is None:
+        raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
+
+    messenger = LiveKitMessenger(
+        url=settings.livekit_server_url or settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    timestamp = datetime.now(tz=UTC).isoformat()
+    token_service = LiveKitTokenService(
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+        ttl_seconds=settings.livekit_room_ttl_seconds,
+    )
+    assistant_token = token_service.create_room_token(
+        room_name=room_name,
+        participant_identity=record.assistant_identity,
+        display_name="SightTalk AI",
+    )
+    get_agent_manager().start(
+        room_name=room_name,
+        livekit_url=settings.livekit_server_url or settings.livekit_url,
+        assistant_token=assistant_token,
+        settings=settings,
+        media_policy=record.media_policy,
+    )
+    await messenger.send_json(
+        room_name=room_name,
+        topic="sighttalk.agent",
+        payload={
+            "type": "agent.status",
+            "session_id": room_name,
+            "timestamp": timestamp,
+            "status": "listening",
+        },
+    )
+    await messenger.send_json(
+        room_name=room_name,
+        topic="sighttalk.agent",
+        payload={
+            "type": "cost.estimate",
+            "session_id": room_name,
+            "timestamp": timestamp,
+            "audio_seconds": 0,
+            "image_frames_sent": 0,
+            "mode": record.media_policy.mode,
+        },
+    )
+    if settings.ai_provider == "mock":
+        await messenger.send_json(
+            room_name=room_name,
+            topic="sighttalk.agent",
+            payload={
+                "type": "transcript.done",
+                "session_id": room_name,
+                "timestamp": timestamp,
+                "speaker": "assistant",
+                "text": "自动监听已开启。你可以直接说话，我会结合摄像头画面回答。",
+                "message_id": f"mock-agent-start-{room_name}",
+            },
+        )
+    return {"status": "started", "room_name": room_name}
 
 
 @router.post("/session/{room_name}/mock-events")

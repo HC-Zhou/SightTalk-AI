@@ -39,6 +39,7 @@ ProviderEventType = Literal[
     "transcript_delta",
     "transcript_done",
     "response_done",
+    "audio_delta",
     "audio",
     "error",
 ]
@@ -52,6 +53,7 @@ class ProviderEvent:
     message_id: str = ""
     status: str = ""
     audio: bytes = b""
+    mime_type: str = "audio/pcm"
     code: str = ""
     message: str = ""
 

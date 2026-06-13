@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -100,6 +101,14 @@ class AgentSession:
                 "type": "response.done",
                 "message_id": event.message_id,
                 "audio_playback_complete": False,
+            }
+        if event.type == "audio_delta":
+            return {
+                **base,
+                "type": "audio.delta",
+                "message_id": event.message_id,
+                "mime_type": event.mime_type,
+                "audio": base64.b64encode(event.audio).decode("ascii"),
             }
         if event.type == "error":
             return {**base, "type": "error", "code": event.code, "message": event.message}

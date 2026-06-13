@@ -57,6 +57,7 @@ class MockRealtimeProvider(AIProvider):
 
     async def send_control(self, event: ControlEvent) -> None:
         if event.type == "interrupt":
+            await self._queue.put(ProviderEvent(type="status", status="interrupted"))
             await self._queue.put(ProviderEvent(type="status", status="listening"))
 
     async def events(self) -> AsyncIterator[ProviderEvent]:
