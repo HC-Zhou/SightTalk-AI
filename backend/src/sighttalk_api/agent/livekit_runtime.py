@@ -51,9 +51,9 @@ class LiveKitRoomAgent:
             memory_max_items=settings.harness_memory_max_items,
             short_memory_max_messages=settings.short_memory_max_messages,
             short_memory_max_estimated_tokens=settings.short_memory_max_estimated_tokens,
-            memory_search_limit=settings.mem0_search_limit,
-            memory_search_threshold=settings.mem0_search_threshold,
-            memory_agent_id=settings.mem0_agent_id,
+            memory_search_limit=settings.memory_search_limit,
+            memory_search_threshold=settings.memory_search_threshold,
+            memory_agent_id=settings.memory_agent_id,
             long_term_memory=create_long_term_memory(settings),
         )
         self._tooling = AgentTooling(

@@ -54,6 +54,7 @@ class SummaryResult:
     summary: str
     retained_turns: tuple[ConversationTurn, ...]
     used_fallback: bool = False
+    summarized_turns: tuple[ConversationTurn, ...] = ()
 
 
 @dataclass
@@ -195,8 +196,14 @@ class ContextSummarizer:
                 summary=context.state.current_summary,
                 retained_turns=retained,
                 used_fallback=True,
+                summarized_turns=older_turns,
             )
-        return SummaryResult(summary=summary.strip(), retained_turns=retained, used_fallback=False)
+        return SummaryResult(
+            summary=summary.strip(),
+            retained_turns=retained,
+            used_fallback=False,
+            summarized_turns=older_turns,
+        )
 
     def _default_summary(self, turns: Sequence[ConversationTurn]) -> str:
         """Create a deterministic extractive summary for local fallback and tests."""
