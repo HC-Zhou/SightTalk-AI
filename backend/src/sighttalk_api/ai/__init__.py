@@ -1,0 +1,2 @@
+"""AI adapter package."""
+
