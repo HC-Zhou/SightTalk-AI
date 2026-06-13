@@ -35,3 +35,18 @@ export type ServerEvent =
   | ({ type: "cost.snapshot" } & CostSnapshot)
   | { type: "error"; stage: string; message: string; retryable: boolean };
 
+export async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("FileReader did not return a base64 string"));
+        return;
+      }
+      resolve(result.split(",")[1] ?? "");
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+}
