@@ -30,6 +30,7 @@ services:
       BAILIAN_WORKSPACE_ID: ${BAILIAN_WORKSPACE_ID:-}
       BAILIAN_MODEL: ${BAILIAN_MODEL:-qwen3-omni-flash-realtime}
       BAILIAN_REALTIME_URL: ${BAILIAN_REALTIME_URL:-wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
+      BAILIAN_TURN_SILENCE_DURATION_MS: ${BAILIAN_TURN_SILENCE_DURATION_MS:-2000}
     ports:
       - "8000:8000"
     depends_on:

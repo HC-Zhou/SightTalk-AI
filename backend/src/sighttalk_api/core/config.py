@@ -8,6 +8,9 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from sighttalk_api.schemas.livekit import MediaMode, MediaPolicy
 
+DEFAULT_BAILIAN_REALTIME_MODEL = "qwen3-omni-flash-realtime"
+DEFAULT_BAILIAN_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+
 
 class Settings(BaseSettings):
     app_env: str = "development"
@@ -32,8 +35,9 @@ class Settings(BaseSettings):
     bailian_text_model: str = "qwen-plus"
     bailian_vision_model: str = "qwen-vl-plus"
     bailian_workspace_id: str = ""
-    bailian_model: str = ""
-    bailian_realtime_url: str = ""
+    bailian_model: str = DEFAULT_BAILIAN_REALTIME_MODEL
+    bailian_realtime_url: str = DEFAULT_BAILIAN_REALTIME_URL
+    bailian_turn_silence_duration_ms: int = 2000
 
     default_media_mode: MediaMode = "balanced"
     economy_max_video_fps: float = 0.2

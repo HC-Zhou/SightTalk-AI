@@ -42,6 +42,8 @@ class LiveKitRoomAgent:
         self._connected = False
         self._assistant_audio_source: rtc.AudioSource | None = None
         self._terminal_error_sent = False
+        self._provider_ready = asyncio.Event()
+        self._provider_audio_started = asyncio.Event()
 
     async def run(self) -> None:
         self._room.on("track_subscribed", self._handle_track_subscribed)
@@ -51,7 +53,12 @@ class LiveKitRoomAgent:
             self._connected = True
             await self._publish_event(self._agent_session.status_event("connecting"))
             await self._publish_assistant_audio_track()
-            await self._agent_session.start()
+            try:
+                await self._agent_session.start()
+            except RuntimeError as exc:
+                await self._handle_media_provider_error(exc)
+                return
+            self._provider_ready.set()
             await self._publish_event(self._agent_session.status_event("listening"))
             provider_task = asyncio.create_task(self._pump_provider_events())
             self._tasks.add(provider_task)
@@ -109,6 +116,7 @@ class LiveKitRoomAgent:
             await self._publish_event(event)
 
     async def _consume_audio(self, track: rtc.Track) -> None:
+        await self._provider_ready.wait()
         audio_stream = rtc.AudioStream.from_track(
             track=track,
             sample_rate=16_000,
@@ -123,6 +131,7 @@ class LiveKitRoomAgent:
                         bytes(frame.data),
                         sample_rate=frame.sample_rate,
                     )
+                    self._provider_audio_started.set()
                 except RuntimeError as exc:
                     await self._handle_media_provider_error(exc)
                     return
@@ -130,6 +139,8 @@ class LiveKitRoomAgent:
             await audio_stream.aclose()
 
     async def _consume_video(self, track: rtc.Track) -> None:
+        await self._provider_ready.wait()
+        await self._provider_audio_started.wait()
         video_stream = rtc.VideoStream.from_track(track=track, capacity=1)
         try:
             async for event in video_stream:
