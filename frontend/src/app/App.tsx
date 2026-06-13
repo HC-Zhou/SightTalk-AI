@@ -31,6 +31,10 @@ const dangerButton = cn(
   buttonBase,
   'bg-rose-300/42 text-rose-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.42),0_14px_30px_rgba(190,18,60,0.18),0_0_24px_rgba(251,113,133,0.24)] hover:-translate-y-0.5 hover:bg-rose-300/56 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.56),0_18px_38px_rgba(190,18,60,0.22),0_0_34px_rgba(251,113,133,0.32)] focus-visible:outline-rose-400',
 );
+const logoutButton = cn(
+  buttonBase,
+  'bg-red-500/74 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_12px_28px_rgba(185,28,28,0.26),0_0_22px_rgba(248,113,113,0.24)] hover:-translate-y-0.5 hover:bg-red-500/88 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_16px_34px_rgba(185,28,28,0.32),0_0_30px_rgba(248,113,113,0.34)] focus-visible:outline-red-300',
+);
 const dockButtonGlow = 'motion-safe:enabled:animate-dock-glow';
 const captionBase =
   'mx-auto grid max-w-[min(680px,62vw)] gap-2 rounded-2xl bg-white/72 px-4 py-3 text-left text-[0.92rem] font-semibold leading-[1.35] text-slate-950 shadow-[0_12px_28px_rgba(15,23,42,0.18)] backdrop-blur-md';
@@ -176,7 +180,7 @@ export function App() {
           <span>{authUser.email}</span>
         </div>
         <button
-          className={cn(secondaryButton, 'h-[48px] min-w-0 px-4')}
+          className={cn(logoutButton, 'h-[48px] min-w-0 px-4')}
           onClick={handleLogout}
           type="button"
         >

@@ -6,11 +6,17 @@ import pytest
 
 from sighttalk_api.providers.bailian import (
     BailianRealtimeProvider,
+    is_stale_image_protocol_error,
     normalize_realtime_model,
     normalize_realtime_url,
     realtime_url_with_model,
 )
-from sighttalk_api.providers.base import AudioChunk, ImageFrame, ProviderSessionConfig
+from sighttalk_api.providers.base import (
+    AudioChunk,
+    ImageFrame,
+    ProviderContext,
+    ProviderSessionConfig,
+)
 
 
 class FakeConnection:
@@ -64,7 +70,7 @@ async def test_bailian_connect_uses_session_update(monkeypatch) -> None:
     assert first_payload["session"]["input_audio_format"] == "pcm"  # type: ignore[index]
     turn_detection = first_payload["session"]["turn_detection"]  # type: ignore[index]
     assert turn_detection["type"] == "server_vad"  # type: ignore[index]
-    assert turn_detection["silence_duration_ms"] == 2000  # type: ignore[index]
+    assert turn_detection["silence_duration_ms"] == 800  # type: ignore[index]
     assert turn_detection["create_response"] is True  # type: ignore[index]
     assert turn_detection["interrupt_response"] is True  # type: ignore[index]
 
@@ -97,6 +103,43 @@ async def test_bailian_connect_uses_custom_turn_silence_duration(monkeypatch) ->
     first_payload = fake_connection.sent[0]
     turn_detection = first_payload["session"]["turn_detection"]  # type: ignore[index]
     assert turn_detection["silence_duration_ms"] == 2500  # type: ignore[index]
+
+
+async def test_bailian_uses_vad_auto_response_even_when_manual_gate_requested(
+    monkeypatch,
+) -> None:
+    fake_connection = FakeConnection()
+
+    async def fake_connect(url: str, **kwargs: object) -> FakeConnection:
+        return fake_connection
+
+    monkeypatch.setattr("sighttalk_api.providers.bailian.websockets.connect", fake_connect)
+    provider = BailianRealtimeProvider(
+        api_key="key",
+        realtime_url="wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+        region="cn-beijing",
+        workspace_id="",
+        model="qwen3-omni-flash-realtime",
+        manual_response_enabled=True,
+    )
+
+    await provider.connect(
+        ProviderSessionConfig(
+            session_id="room-1",
+            model="qwen3-omni-flash-realtime",
+            workspace_id="",
+            system_prompt="initial",
+        )
+    )
+    await provider.update_context(ProviderContext(system_prompt="updated"))
+    await provider.create_response()
+
+    assert not provider.capabilities().supports_manual_response
+    turn_detection = fake_connection.sent[0]["session"]["turn_detection"]  # type: ignore[index]
+    assert turn_detection["create_response"] is True  # type: ignore[index]
+    assert fake_connection.sent[1]["type"] == "session.update"
+    assert fake_connection.sent[1]["session"]["instructions"] == "updated"  # type: ignore[index]
+    assert len(fake_connection.sent) == 2
 
 
 async def test_bailian_connect_retries_transient_failures(monkeypatch) -> None:
@@ -170,12 +213,13 @@ async def test_bailian_media_events_match_realtime_protocol(monkeypatch) -> None
     )
 
     await provider.send_audio(AudioChunk(data=b"pcm", sample_rate=16_000))
-    await provider.send_image(
+    image_sent = await provider.send_image(
         ImageFrame(data=b"jpeg", mime_type="image/jpeg", width=320, height=240)
     )
 
     audio_payload = fake_connection.sent[1]
     image_payload = fake_connection.sent[2]
+    assert image_sent
     assert audio_payload == {
         "event_id": audio_payload["event_id"],
         "type": "input_audio_buffer.append",
@@ -205,15 +249,75 @@ async def test_bailian_skips_images_before_audio(monkeypatch) -> None:
         )
     )
 
-    await provider.send_image(
+    image_sent = await provider.send_image(
         ImageFrame(data=b"jpeg", mime_type="image/jpeg", width=320, height=240)
     )
     await provider.send_audio(AudioChunk(data=b"pcm", sample_rate=16_000))
 
+    assert not image_sent
     assert [payload["type"] for payload in fake_connection.sent] == [
         "session.update",
         "input_audio_buffer.append",
     ]
+
+
+async def test_bailian_skips_images_after_current_audio_buffer_commits(
+    monkeypatch,
+) -> None:
+    fake_connection = FakeConnection()
+
+    async def fake_connect(url: str, **kwargs: object) -> FakeConnection:
+        return fake_connection
+
+    monkeypatch.setattr("sighttalk_api.providers.bailian.websockets.connect", fake_connect)
+    provider = make_provider()
+    await provider.connect(
+        ProviderSessionConfig(
+            session_id="room-1",
+            model="qwen3-omni-flash-realtime",
+            workspace_id="",
+            system_prompt="test",
+        )
+    )
+
+    await provider.send_audio(AudioChunk(data=b"pcm", sample_rate=16_000))
+    image_before_commit = await provider.send_image(
+        ImageFrame(data=b"jpeg-1", mime_type="image/jpeg", width=320, height=240)
+    )
+    provider._map_event({"type": "input_audio_buffer.committed"})  # noqa: SLF001
+    image_after_commit = await provider.send_image(
+        ImageFrame(data=b"jpeg-2", mime_type="image/jpeg", width=320, height=240)
+    )
+
+    assert image_before_commit
+    assert not image_after_commit
+    assert [payload["type"] for payload in fake_connection.sent] == [
+        "session.update",
+        "input_audio_buffer.append",
+        "input_image_buffer.append",
+    ]
+
+
+def test_bailian_suppresses_stale_image_protocol_errors() -> None:
+    provider = make_provider()
+
+    event = provider._map_event(  # noqa: SLF001
+        {
+            "type": "error",
+            "error": {
+                "code": "PROVIDER_PROTOCOL_ERROR",
+                "message": "Error append image before append audio.",
+            },
+        }
+    )
+
+    assert event is None
+    assert is_stale_image_protocol_error(
+        {
+            "code": "PROVIDER_PROTOCOL_ERROR",
+            "message": "Error append image before append audio.",
+        }
+    )
 
 
 def test_realtime_url_with_model_preserves_existing_query() -> None:

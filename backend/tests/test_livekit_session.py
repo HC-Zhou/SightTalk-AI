@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 from sighttalk_api.main import create_app
 from sighttalk_api.services.session_registry import get_session_registry
 
+TEST_AUTH_SECRET = "test-auth-secret-at-least-32-bytes"
+TEST_LIVEKIT_SECRET = "test-livekit-secret-at-least-32-bytes"
+
 
 class FakeRoomService:
     def __init__(self, **kwargs: object) -> None:
@@ -17,7 +20,7 @@ class FakeRoomService:
 
 def make_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("SIGHTTALK_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AUTH_SECRET_KEY", "test-auth-secret")
+    monkeypatch.setenv("AUTH_SECRET_KEY", TEST_AUTH_SECRET)
     return TestClient(create_app())
 
 
@@ -44,7 +47,7 @@ def test_create_session_requires_auth(monkeypatch, tmp_path) -> None:
 def test_create_session_returns_livekit_contract(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AI_PROVIDER", "mock")
     monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", TEST_LIVEKIT_SECRET)
     monkeypatch.setattr("sighttalk_api.api.v1.livekit.LiveKitRoomService", FakeRoomService)
     client = make_client(monkeypatch, tmp_path)
     headers = auth_headers(client)
@@ -61,7 +64,7 @@ def test_create_session_returns_livekit_contract(monkeypatch, tmp_path) -> None:
     assert payload["participant_identity"].startswith("user-")
     assert payload["assistant_identity"] == f"assistant-{payload['room_name']}"
     assert payload["media_policy"]["mode"] == "accurate"
-    decoded = jwt.decode(payload["participant_token"], "test-secret", algorithms=["HS256"])
+    decoded = jwt.decode(payload["participant_token"], TEST_LIVEKIT_SECRET, algorithms=["HS256"])
     assert decoded["iss"] == "test-key"
     assert decoded["sub"] == payload["participant_identity"]
     assert decoded["video"]["room"] == payload["room_name"]

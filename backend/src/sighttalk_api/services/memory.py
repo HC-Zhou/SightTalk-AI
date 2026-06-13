@@ -1,3 +1,5 @@
+"""Append-only user memory storage for previous conversation transcripts."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ from typing import Literal, cast
 
 @dataclass(frozen=True)
 class MemoryRecord:
+    """One transcript entry persisted as user-scoped memory."""
+
     user_id: str
     session_id: str
     timestamp: datetime
@@ -18,11 +22,14 @@ class MemoryRecord:
 
 
 class MemoryStore:
+    """Thread-safe JSONL memory store for single-node deployments."""
+
     def __init__(self, data_dir: Path) -> None:
         self._memory_dir = data_dir / "memory"
         self._lock = Lock()
 
     def append(self, record: MemoryRecord) -> None:
+        """Append a non-empty transcript memory record."""
         text = record.text.strip()
         if not text:
             return
@@ -39,6 +46,7 @@ class MemoryStore:
                 file.write("\n")
 
     def recent(self, *, user_id: str, limit: int) -> list[MemoryRecord]:
+        """Return the newest valid memory records for a user."""
         if limit <= 0:
             return []
         path = self._path_for(user_id)
@@ -57,9 +65,11 @@ class MemoryStore:
         return records[-limit:]
 
     def _path_for(self, user_id: str) -> Path:
+        """Resolve the user-scoped memory path without exposing raw user ids."""
         return self._memory_dir / f"{safe_memory_file_name(user_id)}.jsonl"
 
     def _record_from_line(self, line: str) -> MemoryRecord | None:
+        """Decode one JSONL record and ignore corrupt or incompatible rows."""
         try:
             payload = json.loads(line)
             raw_speaker = str(payload["speaker"])
@@ -78,6 +88,7 @@ class MemoryStore:
 
 
 def safe_memory_file_name(user_id: str) -> str:
+    """Convert a user id into a safe file-name stem."""
     safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in user_id)
     return safe or "unknown"
 
@@ -89,6 +100,7 @@ def memory_record_now(
     speaker: Literal["user", "assistant"],
     text: str,
 ) -> MemoryRecord:
+    """Create a timestamped memory record using the current UTC time."""
     return MemoryRecord(
         user_id=user_id,
         session_id=session_id,

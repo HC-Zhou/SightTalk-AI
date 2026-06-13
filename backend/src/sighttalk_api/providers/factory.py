@@ -1,3 +1,5 @@
+"""Factory for selecting the configured realtime AI provider."""
+
 from __future__ import annotations
 
 from sighttalk_api.core.config import Settings
@@ -7,6 +9,7 @@ from sighttalk_api.providers.mock import MockRealtimeProvider
 
 
 def create_provider(settings: Settings) -> AIProvider:
+    """Instantiate the provider adapter selected by application settings."""
     if settings.ai_provider == "bailian":
         settings.validate_for_session()
         return BailianRealtimeProvider(
@@ -16,7 +19,10 @@ def create_provider(settings: Settings) -> AIProvider:
             workspace_id=settings.bailian_workspace_id,
             model=settings.bailian_model,
             turn_silence_duration_ms=settings.bailian_turn_silence_duration_ms,
+            manual_response_enabled=settings.ai_manual_response_enabled,
         )
     if settings.ai_provider == "mock":
-        return MockRealtimeProvider()
+        return MockRealtimeProvider(
+            manual_response_enabled=settings.ai_manual_response_enabled,
+        )
     raise ValueError(f"Unsupported AI_PROVIDER: {settings.ai_provider}")

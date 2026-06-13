@@ -1,3 +1,5 @@
+"""FastAPI application factory for the SightTalk backend."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -12,6 +14,7 @@ from sighttalk_api.core.errors import AppError, app_error_handler
 
 
 def create_app() -> FastAPI:
+    """Create and configure the HTTP API application."""
     settings = get_settings()
     app = FastAPI(title="SightTalk API", version="0.1.0")
     app.add_exception_handler(AppError, app_error_handler)

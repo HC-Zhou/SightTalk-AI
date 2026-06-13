@@ -376,6 +376,62 @@ describe('App', () => {
     expect(play).toHaveBeenCalled();
   });
 
+  it('pauses microphone while keeping camera preview during assistant audio', async () => {
+    const { stream, audio, video } = createStream();
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await signIn(user);
+
+    await user.click(screen.getByRole('button', { name: '开始' }));
+    const room = await latestRoom();
+
+    expect(audio.enabled).toBe(true);
+    expect(video.enabled).toBe(true);
+
+    act(() => {
+      room.emitData({
+        type: 'agent.status',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        status: 'speaking',
+      });
+    });
+
+    expect(audio.enabled).toBe(false);
+    expect(video.enabled).toBe(true);
+
+    act(() => {
+      room.emitData({
+        type: 'response.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        message_id: 'assistant-1',
+        audio_playback_complete: true,
+      });
+    });
+
+    expect(audio.enabled).toBe(true);
+    expect(video.enabled).toBe(true);
+
+    act(() => {
+      room.emitData({
+        type: 'agent.status',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        status: 'speaking',
+      });
+    });
+    await user.click(screen.getByRole('button', { name: '打断' }));
+
+    expect(audio.enabled).toBe(true);
+    expect(video.enabled).toBe(true);
+  });
+
   it('stops session and releases local tracks', async () => {
     const { stream, audio, video } = createStream();
     vi.stubGlobal('navigator', {
