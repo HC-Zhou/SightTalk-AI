@@ -1,6 +1,6 @@
 import type { ClientEvent, ServerEvent } from "../types/events";
 
-type ClientStatus = "connecting" | "open" | "closed" | "error";
+export type ClientStatus = "connecting" | "open" | "closed" | "error";
 
 export type VisionSessionClientOptions = {
   url: string;
