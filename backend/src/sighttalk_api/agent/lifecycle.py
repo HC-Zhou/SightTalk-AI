@@ -12,6 +12,9 @@ from sighttalk_api.agent.execution import LiveKitExecution
 from sighttalk_api.agent.tooling import AgentTooling
 from sighttalk_api.providers.base import ImageFrame
 
+PCM16_BARGE_IN_RMS_THRESHOLD = 700.0
+PCM16_BARGE_IN_PEAK_THRESHOLD = 1_600
+
 LifecycleState = Literal[
     "created",
     "connecting",
@@ -113,7 +116,22 @@ class AgentLifecycle:
         """Forward microphone audio only after the provider is ready."""
         await self._provider_ready.wait()
         if not self._input_enabled.is_set():
-            return
+            if not (
+                self._assistant_playback_active
+                and is_probable_user_speech(data)
+            ):
+                return
+            await self._interrupt_assistant_playback()
+            try:
+                event = await self.tooling.handle_control_message(b'{"type":"client.interrupt"}')
+            except RuntimeError as exc:
+                await self._handle_terminal_error("PROVIDER_UNAVAILABLE", str(exc))
+                return
+            if event is not None:
+                if event.get("type") == "agent.status":
+                    status = str(event.get("status", "listening"))
+                    self.state = "listening" if status == "listening" else self.state
+                await self.publish_event(event)
         try:
             await self.tooling.send_audio(data, sample_rate=sample_rate)
             self._provider_audio_started.set()
@@ -137,12 +155,7 @@ class AgentLifecycle:
     async def handle_control_message(self, data: bytes) -> None:
         """Apply local control effects before forwarding control to the provider."""
         if is_interrupt_message(data):
-            await self._cancel_assistant_playback()
-            if self.execution is not None:
-                await self.execution.interrupt_playback()
-            self._input_enabled.set()
-            self.state = "interrupted"
-            await self.publish_event(self.context.status_event("interrupted"))
+            await self._interrupt_assistant_playback()
         try:
             event = await self.tooling.handle_control_message(data)
         except RuntimeError as exc:
@@ -233,6 +246,15 @@ class AgentLifecycle:
             with suppress(asyncio.CancelledError):
                 await task
 
+    async def _interrupt_assistant_playback(self) -> None:
+        """Stop assistant playback and return to listening for user speech."""
+        await self._cancel_assistant_playback()
+        if self.execution is not None:
+            await self.execution.interrupt_playback()
+        self._input_enabled.set()
+        self.state = "interrupted"
+        await self.publish_event(self.context.status_event("interrupted"))
+
     def _clear_playback_completion_task(self, task: asyncio.Task[None]) -> None:
         if self._playback_completion_task is task:
             self._playback_completion_task = None
@@ -261,3 +283,23 @@ def is_interrupt_message(data: bytes) -> bool:
     if not isinstance(payload, dict):
         return False
     return str(payload.get("type", "")) == "client.interrupt"
+
+
+def is_probable_user_speech(data: bytes) -> bool:
+    """Return whether a 16-bit PCM chunk is loud enough to barge in."""
+    sample_count = len(data) // 2
+    if sample_count <= 0:
+        return False
+    total_square = 0
+    peak = 0
+    for index in range(sample_count):
+        offset = index * 2
+        sample = int.from_bytes(data[offset : offset + 2], "little", signed=True)
+        abs_sample = abs(sample)
+        peak = max(peak, abs_sample)
+        total_square += sample * sample
+    rms = (total_square / sample_count) ** 0.5
+    return (
+        rms >= PCM16_BARGE_IN_RMS_THRESHOLD
+        and peak >= PCM16_BARGE_IN_PEAK_THRESHOLD
+    )

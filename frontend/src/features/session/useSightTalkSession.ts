@@ -51,29 +51,19 @@ export function useSightTalkSession(authToken?: string) {
   const localStreamRef = useRef<MediaStream | undefined>(undefined);
   const assistantAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const audioMutedByInterruptRef = useRef(false);
-  const inputSuspendedByAssistantRef = useRef(false);
   const micEnabledRef = useRef(true);
   const cameraEnabledRef = useRef(true);
   const { stream, requestMedia, stopMedia } = useLocalMedia();
 
   const syncLocalInputTracks = useCallback(() => {
     const currentStream = localStreamRef.current;
-    const inputAllowed = !inputSuspendedByAssistantRef.current;
     currentStream?.getAudioTracks().forEach((track) => {
-      track.enabled = inputAllowed && micEnabledRef.current;
+      track.enabled = micEnabledRef.current;
     });
     currentStream?.getVideoTracks().forEach((track) => {
       track.enabled = cameraEnabledRef.current;
     });
   }, []);
-
-  const setAssistantInputSuspended = useCallback(
-    (suspended: boolean) => {
-      inputSuspendedByAssistantRef.current = suspended;
-      syncLocalInputTracks();
-    },
-    [syncLocalInputTracks],
-  );
 
   const pauseAssistantAudio = useCallback(() => {
     audioMutedByInterruptRef.current = true;
@@ -123,12 +113,6 @@ export function useSightTalkSession(authToken?: string) {
     (event: RealtimeEvent) => {
       switch (event.type) {
         case 'agent.status':
-          if (event.status === 'speaking') {
-            setAssistantInputSuspended(true);
-          }
-          if (event.status === 'listening' || event.status === 'interrupted') {
-            setAssistantInputSuspended(false);
-          }
           setState((current) => ({ ...current, status: event.status }));
           break;
         case 'transcript.delta':
@@ -156,15 +140,12 @@ export function useSightTalkSession(authToken?: string) {
           }));
           break;
         case 'response.done':
-          if (event.audio_playback_complete) {
-            setAssistantInputSuspended(false);
-          }
           break;
         case 'audio.delta':
           break;
       }
     },
-    [mergeMessage, resumeAssistantAudio, setAssistantInputSuspended],
+    [mergeMessage, resumeAssistantAudio],
   );
 
   const handleDataReceived = useCallback(
@@ -190,7 +171,6 @@ export function useSightTalkSession(authToken?: string) {
     roomRef.current = undefined;
     sessionRef.current = undefined;
     localStreamRef.current = undefined;
-    inputSuspendedByAssistantRef.current = false;
     micEnabledRef.current = true;
     cameraEnabledRef.current = true;
     assistantAudioElementsRef.current.forEach((element) => {
@@ -230,7 +210,6 @@ export function useSightTalkSession(authToken?: string) {
       }
       const localStream = await requestMedia();
       localStreamRef.current = localStream;
-      inputSuspendedByAssistantRef.current = false;
       micEnabledRef.current = true;
       cameraEnabledRef.current = true;
       syncLocalInputTracks();
@@ -321,10 +300,9 @@ export function useSightTalkSession(authToken?: string) {
       reliable: true,
       topic: CONTROL_TOPIC,
     });
-    setAssistantInputSuspended(false);
     pauseAssistantAudio();
     setState((current) => ({ ...current, status: 'interrupted' }));
-  }, [pauseAssistantAudio, setAssistantInputSuspended]);
+  }, [pauseAssistantAudio]);
 
   const toggleMic = useCallback(() => {
     const enabled = !state.micEnabled;
