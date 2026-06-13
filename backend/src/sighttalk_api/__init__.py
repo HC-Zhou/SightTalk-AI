@@ -1,0 +1,2 @@
+"""SightTalk AI backend package."""
+
