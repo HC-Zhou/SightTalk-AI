@@ -28,8 +28,8 @@ services:
       BAILIAN_TEXT_MODEL: ${BAILIAN_TEXT_MODEL:-qwen-plus}
       BAILIAN_VISION_MODEL: ${BAILIAN_VISION_MODEL:-qwen-vl-plus}
       BAILIAN_WORKSPACE_ID: ${BAILIAN_WORKSPACE_ID:-}
-      BAILIAN_MODEL: ${BAILIAN_MODEL:-multimodal-dialog}
-      BAILIAN_REALTIME_URL: ${BAILIAN_REALTIME_URL:-wss://dashscope.aliyuncs.com/api-ws/v1/inference}
+      BAILIAN_MODEL: ${BAILIAN_MODEL:-qwen3-omni-flash-realtime}
+      BAILIAN_REALTIME_URL: ${BAILIAN_REALTIME_URL:-wss://dashscope.aliyuncs.com/api-ws/v1/realtime}
     ports:
       - "8000:8000"
     depends_on:

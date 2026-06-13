@@ -1,0 +1,130 @@
+from __future__ import annotations
+
+import json
+
+from sighttalk_api.providers.bailian import (
+    BailianRealtimeProvider,
+    normalize_realtime_model,
+    normalize_realtime_url,
+    realtime_url_with_model,
+)
+from sighttalk_api.providers.base import AudioChunk, ImageFrame, ProviderSessionConfig
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+    async def close(self) -> None:
+        return None
+
+
+def make_provider() -> BailianRealtimeProvider:
+    return BailianRealtimeProvider(
+        api_key="key",
+        realtime_url="wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+        region="cn-beijing",
+        workspace_id="",
+        model="qwen3-omni-flash-realtime",
+    )
+
+
+async def test_bailian_connect_uses_session_update(monkeypatch) -> None:
+    fake_connection = FakeConnection()
+    calls: list[dict[str, object]] = []
+
+    async def fake_connect(url: str, **kwargs: object) -> FakeConnection:
+        calls.append({"url": url, **kwargs})
+        return fake_connection
+
+    monkeypatch.setattr("sighttalk_api.providers.bailian.websockets.connect", fake_connect)
+    provider = make_provider()
+
+    await provider.connect(
+        ProviderSessionConfig(
+            session_id="room-1",
+            model="qwen3-omni-flash-realtime",
+            workspace_id="",
+            system_prompt="你是视觉语音助手。",
+        )
+    )
+
+    assert calls[0]["url"] == (
+        "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+        "?model=qwen3-omni-flash-realtime"
+    )
+    first_payload = fake_connection.sent[0]
+    assert first_payload["type"] == "session.update"
+    assert first_payload["session"]["modalities"] == ["text", "audio"]  # type: ignore[index]
+    assert first_payload["session"]["input_audio_format"] == "pcm"  # type: ignore[index]
+
+
+async def test_bailian_media_events_match_realtime_protocol(monkeypatch) -> None:
+    fake_connection = FakeConnection()
+
+    async def fake_connect(url: str, **kwargs: object) -> FakeConnection:
+        return fake_connection
+
+    monkeypatch.setattr("sighttalk_api.providers.bailian.websockets.connect", fake_connect)
+    provider = make_provider()
+    await provider.connect(
+        ProviderSessionConfig(
+            session_id="room-1",
+            model="qwen3-omni-flash-realtime",
+            workspace_id="",
+            system_prompt="test",
+        )
+    )
+
+    await provider.send_audio(AudioChunk(data=b"pcm", sample_rate=16_000))
+    await provider.send_image(
+        ImageFrame(data=b"jpeg", mime_type="image/jpeg", width=320, height=240)
+    )
+
+    audio_payload = fake_connection.sent[1]
+    image_payload = fake_connection.sent[2]
+    assert audio_payload == {
+        "event_id": audio_payload["event_id"],
+        "type": "input_audio_buffer.append",
+        "audio": "cGNt",
+    }
+    assert image_payload == {
+        "event_id": image_payload["event_id"],
+        "type": "input_image_buffer.append",
+        "image": "anBlZw==",
+    }
+
+
+def test_realtime_url_with_model_preserves_existing_query() -> None:
+    assert realtime_url_with_model("wss://example.test/realtime?foo=bar", "qwen") == (
+        "wss://example.test/realtime?foo=bar&model=qwen"
+    )
+
+
+def test_realtime_normalizers_handle_legacy_defaults() -> None:
+    assert normalize_realtime_url("wss://dashscope.aliyuncs.com/api-ws/v1/inference") == (
+        "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+    )
+    assert normalize_realtime_model("multimodal-dialog") == "qwen3-omni-flash-realtime"
+
+
+def test_bailian_maps_nested_error() -> None:
+    provider = make_provider()
+
+    event = provider._map_event(  # noqa: SLF001
+        {
+            "type": "error",
+            "error": {
+                "code": "invalid_request_error",
+                "message": "Invalid payload",
+            },
+        }
+    )
+
+    assert event is not None
+    assert event.type == "error"
+    assert event.code == "invalid_request_error"
+    assert event.message == "Invalid payload"
