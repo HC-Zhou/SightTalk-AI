@@ -4,7 +4,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from sighttalk_api.ai.adapters import AsrResult
+from sighttalk_api.ai.adapters import AsrResult, MultimodalResult
 from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
 from sighttalk_api.media.frame_buffer import FrameItem
@@ -128,3 +128,54 @@ class BailianAsrAdapter:
         )
         response.raise_for_status()
         return AsrResult(text=_extract_chat_content(response.json()))
+
+
+class BailianMultimodalAdapter:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        http_client: AsyncHttpClient | None = None,
+    ) -> None:
+        self.settings = settings
+        self.api_key = _require_api_key(settings)
+        self.client = http_client or httpx.AsyncClient(
+            timeout=settings.bailian_timeout_seconds
+        )
+
+    async def answer(
+        self,
+        user_text: str,
+        keyframes: list[FrameItem],
+        history: list[tuple[str, str]],
+    ) -> MultimodalResult:
+        if not user_text.strip():
+            return MultimodalResult(answer="我没有听清问题，请再说一遍。")
+        if not keyframes:
+            return MultimodalResult(answer="我听到了问题，但当前没有可用画面。")
+
+        messages: list[JsonObject] = [
+            {
+                "role": "system",
+                "content": (
+                    "You are SightTalk AI. Answer in the user's language. "
+                    "Use the provided camera frames as visual evidence and keep the "
+                    "answer concise."
+                ),
+            }
+        ]
+        messages.extend({"role": role, "content": text} for role, text in history)
+        user_content: list[JsonObject] = [{"type": "text", "text": user_text}]
+        user_content.extend(_frame_to_image_content(frame) for frame in keyframes)
+        messages.append({"role": "user", "content": user_content})
+
+        response = await self.client.post(
+            _join_url(self.settings.bailian_compatible_base_url, "chat/completions"),
+            headers=_authorization_headers(self.api_key),
+            json={
+                "model": self.settings.bailian_vision_model,
+                "messages": messages,
+            },
+        )
+        response.raise_for_status()
+        return MultimodalResult(answer=_extract_chat_content(response.json()))
