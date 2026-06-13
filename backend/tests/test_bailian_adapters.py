@@ -177,3 +177,42 @@ async def test_bailian_multimodal_posts_text_history_and_images() -> None:
     assert user_message["content"][1]["image_url"]["url"].startswith(
         "data:image/jpeg;base64,"
     )
+
+
+async def test_bailian_multimodal_returns_fallback_for_blank_user_text() -> None:
+    client = FakeAsyncClient([])
+    adapter = BailianMultimodalAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.answer(
+        "   ",
+        [
+            FrameItem(
+                seq=7,
+                captured_at=1710000000000,
+                mime="image/jpeg",
+                data=base64.b64encode(b"frame").decode(),
+                width=640,
+                height=480,
+            )
+        ],
+        [],
+    )
+
+    assert result.answer == "我没有听清问题，请再说一遍。"
+    assert client.posts == []
+
+
+async def test_bailian_multimodal_returns_fallback_without_keyframes() -> None:
+    client = FakeAsyncClient([])
+    adapter = BailianMultimodalAdapter(
+        Settings(ai_provider="bailian", bailian_api_key="sk-test"),
+        http_client=client,
+    )
+
+    result = await adapter.answer("看到了什么？", [], [])
+
+    assert result.answer == "我听到了问题，但当前没有可用画面。"
+    assert client.posts == []
