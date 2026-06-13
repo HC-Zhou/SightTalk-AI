@@ -40,6 +40,24 @@ def test_agent_maps_provider_transcript_event() -> None:
     assert payload["text"] == "hello"
 
 
+def test_agent_maps_provider_audio_event() -> None:
+    session = make_session()
+
+    payload = session.map_provider_event(
+        ProviderEvent(
+            type="audio_delta",
+            audio=b"audio",
+            mime_type="audio/pcm",
+            message_id="msg-1",
+        )
+    )
+
+    assert payload is not None
+    assert payload["type"] == "audio.delta"
+    assert payload["audio"] == "YXVkaW8="
+    assert payload["mime_type"] == "audio/pcm"
+
+
 async def test_agent_handles_mode_update() -> None:
     session = make_session()
 
@@ -57,6 +75,24 @@ async def test_agent_handles_mode_update() -> None:
     assert payload is not None
     assert payload["type"] == "cost.estimate"
     assert payload["mode"] == "accurate"
+
+
+async def test_agent_handles_interrupt() -> None:
+    session = make_session()
+
+    payload = await session.handle_control_message(
+        json.dumps(
+            {
+                "type": "client.interrupt",
+                "session_id": "room-1",
+                "timestamp": "now",
+            }
+        )
+    )
+
+    assert payload is not None
+    assert payload["type"] == "agent.status"
+    assert payload["status"] == "listening"
 
 
 async def test_mock_provider_emits_events() -> None:

@@ -158,6 +158,15 @@ class BailianRealtimeProvider(AIProvider):
                 text=text or str(payload.get("delta", "")),
                 message_id=message_id,
             )
+        if event_type in {"response.audio.delta", "response.output_audio.delta"}:
+            encoded = str(payload.get("delta", payload.get("audio", "")))
+            audio = base64.b64decode(encoded) if encoded else b""
+            return ProviderEvent(
+                type="audio_delta",
+                audio=audio,
+                mime_type=str(payload.get("mime_type", "audio/pcm")),
+                message_id=message_id,
+            )
         if event_type in {"response.done", "response.completed"}:
             return ProviderEvent(type="response_done", message_id=message_id)
         if event_type in {"error", "session.error"}:

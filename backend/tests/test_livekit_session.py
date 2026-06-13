@@ -100,3 +100,49 @@ def test_mock_events_endpoint_sends_agent_events(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "sent"
     assert [event["topic"] for event in sent] == ["sighttalk.agent"] * 3
+
+
+def test_agent_start_endpoint_enters_listening(monkeypatch) -> None:
+    sent: list[dict[str, object]] = []
+    started: list[str] = []
+
+    class FakeMessenger:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def send_json(
+            self,
+            *,
+            room_name: str,
+            topic: str,
+            payload: dict[str, object],
+        ) -> None:
+            sent.append({"room_name": room_name, "topic": topic, "payload": payload})
+
+    class FakeAgentManager:
+        def start(self, **kwargs: object) -> None:
+            started.append(str(kwargs["room_name"]))
+
+        async def stop(self, room_name: str) -> None:
+            return None
+
+    monkeypatch.setenv("AI_PROVIDER", "mock")
+    monkeypatch.setattr("sighttalk_api.api.v1.livekit.LiveKitRoomService", FakeRoomService)
+    monkeypatch.setattr("sighttalk_api.api.v1.livekit.LiveKitMessenger", FakeMessenger)
+    monkeypatch.setattr(
+        "sighttalk_api.api.v1.livekit.get_agent_manager",
+        lambda: FakeAgentManager(),
+    )
+    client = TestClient(create_app())
+    created = client.post("/api/v1/livekit/session", json={}).json()
+
+    response = client.post(f"/api/v1/livekit/session/{created['room_name']}/agent/start")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    assert started == [created["room_name"]]
+    payloads = [event["payload"] for event in sent]
+    assert payloads[0]["type"] == "agent.status"
+    assert payloads[0]["status"] == "listening"
+    assert payloads[1]["type"] == "cost.estimate"
+    assert payloads[2]["type"] == "transcript.done"
