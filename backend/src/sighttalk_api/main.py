@@ -1,21 +1,24 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from sighttalk_api.ai.mock_adapters import MockAsrAdapter, MockMultimodalAdapter, MockTtsAdapter
 from sighttalk_api.ai.orchestrator import DialogueOrchestrator
+from sighttalk_api.ai.provider_adapters import build_adapters
 from sighttalk_api.api.v1.audio import create_audio_router
 from sighttalk_api.api.v1.health import health
 from sighttalk_api.api.v1.health import router as health_router
 from sighttalk_api.api.v1.websocket import create_websocket_router
+from sighttalk_api.core.config import Settings
 from sighttalk_api.core.session import SessionStore
 from sighttalk_api.storage.audio_store import InMemoryAudioStore
 
+settings = Settings()
+asr_adapter, multimodal_adapter, tts_adapter = build_adapters(settings)
 session_store = SessionStore()
 audio_store = InMemoryAudioStore()
 orchestrator = DialogueOrchestrator(
-    asr=MockAsrAdapter(),
-    multimodal=MockMultimodalAdapter(),
-    tts=MockTtsAdapter(),
+    asr=asr_adapter,
+    multimodal=multimodal_adapter,
+    tts=tts_adapter,
     audio_store=audio_store,
 )
 
