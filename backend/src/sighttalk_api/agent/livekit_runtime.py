@@ -9,7 +9,7 @@ from typing import Any
 from livekit import rtc
 from PIL import Image
 
-from sighttalk_api.agent.worker import AGENT_TOPIC, AgentSession
+from sighttalk_api.agent.worker import AGENT_TOPIC, CONTROL_TOPIC, AgentSession
 from sighttalk_api.core.config import Settings
 from sighttalk_api.providers.base import ImageFrame
 from sighttalk_api.providers.factory import create_provider
@@ -45,6 +45,7 @@ class LiveKitRoomAgent:
 
     async def run(self) -> None:
         self._room.on("track_subscribed", self._handle_track_subscribed)
+        self._room.on("data_received", self._handle_data_received)
         try:
             await self._room.connect(self._livekit_url, self._assistant_token)
             self._connected = True
@@ -84,6 +85,28 @@ class LiveKitRoomAgent:
             task = asyncio.create_task(self._consume_video(track))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
+
+    def _handle_data_received(self, packet: rtc.DataPacket) -> None:
+        if packet.topic != CONTROL_TOPIC:
+            return
+        task = asyncio.create_task(self._handle_control_message(packet.data))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _handle_control_message(self, data: bytes) -> None:
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        if payload.get("type") == "client.interrupt":
+            await self._interrupt_playback()
+        try:
+            event = await self._agent_session.handle_control_message(data)
+        except RuntimeError as exc:
+            await self._handle_media_provider_error(exc)
+            return
+        if event is not None:
+            await self._publish_event(event)
 
     async def _consume_audio(self, track: rtc.Track) -> None:
         audio_stream = rtc.AudioStream.from_track(
@@ -162,6 +185,11 @@ class LiveKitRoomAgent:
             samples_per_channel=samples,
         )
         await self._assistant_audio_source.capture_frame(frame)
+
+    async def _interrupt_playback(self) -> None:
+        if self._assistant_audio_source is not None:
+            self._assistant_audio_source.clear_queue()
+        await self._publish_event(self._agent_session.status_event("interrupted"))
 
     async def _handle_media_provider_error(self, exc: RuntimeError) -> None:
         if not self._terminal_error_sent:

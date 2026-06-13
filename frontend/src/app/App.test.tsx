@@ -12,6 +12,7 @@ interface MockRoom {
     publishData: ReturnType<typeof vi.fn>;
   };
   emitData: (payload: unknown, topic?: string) => void;
+  emitTrackSubscribed: (track: unknown) => void;
 }
 
 interface LiveKitMockModule {
@@ -64,6 +65,10 @@ vi.mock('livekit-client', () => {
       this.listeners
         .get(RoomEvent.DataReceived)
         ?.forEach((listener) => listener(bytes, undefined, undefined, topic));
+    }
+
+    emitTrackSubscribed(track: unknown) {
+      this.listeners.get(RoomEvent.TrackSubscribed)?.forEach((listener) => listener(track));
     }
   }
 
@@ -207,6 +212,14 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: '开始对话' }));
     const room = await latestRoom();
+    const audioElement = document.createElement('audio');
+    const pause = vi.spyOn(audioElement, 'pause').mockImplementation(() => undefined);
+    const play = vi.spyOn(audioElement, 'play').mockResolvedValue(undefined);
+    room.emitTrackSubscribed({
+      kind: 'audio',
+      attach: () => audioElement,
+    });
+
     act(() => {
       room.emitData({
         type: 'transcript.done',
@@ -232,6 +245,22 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '打断' }));
 
     expect(room.localParticipant.publishData).toHaveBeenCalledTimes(1);
+    expect(pause).toHaveBeenCalled();
+    expect(audioElement.muted).toBe(true);
+
+    act(() => {
+      room.emitData({
+        type: 'transcript.delta',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '新的回答',
+        message_id: 'assistant-2',
+      });
+    });
+
+    expect(audioElement.muted).toBe(false);
+    expect(play).toHaveBeenCalled();
   });
 
   it('stops session and releases local tracks', async () => {

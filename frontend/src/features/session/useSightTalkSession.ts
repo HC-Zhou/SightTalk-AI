@@ -49,7 +49,29 @@ export function useSightTalkSession() {
   const roomRef = useRef<Room | undefined>(undefined);
   const sessionRef = useRef<CreateLiveKitSessionResponse | undefined>(undefined);
   const assistantAudioElementsRef = useRef<HTMLMediaElement[]>([]);
+  const audioMutedByInterruptRef = useRef(false);
   const { stream, requestMedia, stopMedia } = useLocalMedia();
+
+  const pauseAssistantAudio = useCallback(() => {
+    audioMutedByInterruptRef.current = true;
+    assistantAudioElementsRef.current.forEach((element) => {
+      element.muted = true;
+      element.pause();
+    });
+  }, []);
+
+  const resumeAssistantAudio = useCallback(() => {
+    if (!audioMutedByInterruptRef.current) {
+      return;
+    }
+    audioMutedByInterruptRef.current = false;
+    assistantAudioElementsRef.current.forEach((element) => {
+      element.muted = false;
+      void element.play().catch(() => {
+        // The next user gesture will allow playback if the browser blocks this call.
+      });
+    });
+  }, []);
 
   const mergeMessage = useCallback((event: Extract<RealtimeEvent, { text: string }>) => {
     setState((current) => {
@@ -83,6 +105,9 @@ export function useSightTalkSession() {
           break;
         case 'transcript.delta':
         case 'transcript.done':
+          if (event.speaker === 'assistant') {
+            resumeAssistantAudio();
+          }
           mergeMessage(event);
           break;
         case 'cost.estimate':
@@ -107,7 +132,7 @@ export function useSightTalkSession() {
           break;
       }
     },
-    [mergeMessage],
+    [mergeMessage, resumeAssistantAudio],
   );
 
   const handleDataReceived = useCallback(
@@ -134,11 +159,13 @@ export function useSightTalkSession() {
     sessionRef.current = undefined;
     assistantAudioElementsRef.current.forEach((element) => {
       element.pause();
+      element.muted = false;
       element.removeAttribute('src');
       element.load();
       element.remove();
     });
     assistantAudioElementsRef.current = [];
+    audioMutedByInterruptRef.current = false;
     if (room) {
       room.off(RoomEvent.DataReceived, handleDataReceived);
       room.disconnect();
@@ -171,6 +198,7 @@ export function useSightTalkSession() {
         }
         const element = track.attach();
         element.autoplay = true;
+        element.muted = audioMutedByInterruptRef.current;
         assistantAudioElementsRef.current.push(element);
         document.body.appendChild(element);
         void element.play().catch(() => {
@@ -238,8 +266,9 @@ export function useSightTalkSession() {
       reliable: true,
       topic: CONTROL_TOPIC,
     });
+    pauseAssistantAudio();
     setState((current) => ({ ...current, status: 'interrupted' }));
-  }, []);
+  }, [pauseAssistantAudio]);
 
   const toggleMic = useCallback(() => {
     const enabled = !state.micEnabled;
