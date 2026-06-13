@@ -35,30 +35,6 @@ services:
     depends_on:
       - livekit
 
-  agent:
-    build:
-      context: ./backend
-    command: ["uv", "run", "python", "-m", "sighttalk_api.agent.worker"]
-    environment:
-      APP_ENV: development
-      LIVEKIT_URL: ${LIVEKIT_SERVER_URL:-ws://livekit:7880}
-      LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-ws://livekit:7880}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
-      AI_PROVIDER: ${AI_PROVIDER:-mock}
-      BAILIAN_API_KEY: ${BAILIAN_API_KEY:-}
-      BAILIAN_REGION: ${BAILIAN_REGION:-cn-beijing}
-      BAILIAN_APP_ID: ${BAILIAN_APP_ID:-}
-      BAILIAN_APP_API_URL: ${BAILIAN_APP_API_URL:-https://dashscope.aliyuncs.com/api/v1}
-      BAILIAN_COMPATIBLE_API_URL: ${BAILIAN_COMPATIBLE_API_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      BAILIAN_TEXT_MODEL: ${BAILIAN_TEXT_MODEL:-qwen-plus}
-      BAILIAN_VISION_MODEL: ${BAILIAN_VISION_MODEL:-qwen-vl-plus}
-      BAILIAN_WORKSPACE_ID: ${BAILIAN_WORKSPACE_ID:-}
-      BAILIAN_MODEL: ${BAILIAN_MODEL:-multimodal-dialog}
-      BAILIAN_REALTIME_URL: ${BAILIAN_REALTIME_URL:-wss://dashscope.aliyuncs.com/api-ws/v1/inference}
-    depends_on:
-      - livekit
-
   frontend:
     build:
       context: ./frontend

@@ -1,6 +1,6 @@
 # SightTalk AI
 
-SightTalk AI is a PC web visual voice assistant. The browser captures camera and microphone media, publishes it to a self-hosted LiveKit room, and sends each user turn to a Python backend with the recognized utterance plus a camera frame. Alibaba Cloud Model Studio Bailian is the production provider target; a `mock` provider is included for local demos and automated tests without cloud credentials.
+SightTalk AI is a PC web visual voice assistant. The browser captures camera and microphone media, publishes it to a self-hosted LiveKit room, and the Python backend starts an assistant participant that continuously listens, samples camera frames, and streams normalized transcript/audio events back to the page. Alibaba Cloud Model Studio Bailian is the production provider target; a `mock` provider is included for local demos and automated tests without cloud credentials.
 
 ## Original Work
 
@@ -12,6 +12,8 @@ Backend:
 
 - FastAPI and Uvicorn for the HTTP API.
 - httpx for Bailian application and compatible-model API calls.
+- livekit and livekit-api for backend room participation, media subscription, room APIs, and token generation.
+- Pillow for backend camera-frame JPEG encoding before provider submission.
 - Pydantic Settings for typed environment configuration.
 - PyJWT for LiveKit-compatible participant token generation.
 - websockets for the Bailian realtime adapter boundary.
@@ -21,7 +23,6 @@ Frontend:
 
 - React, TypeScript, and Vite for the PC web app.
 - livekit-client for WebRTC room connection, local camera/microphone publishing, and data messages.
-- Browser Web Speech API for speech-to-text during user turns, with typed text as a fallback.
 - lucide-react for control icons.
 - Vitest, Testing Library, ESLint, and Prettier-compatible formatting conventions for checks.
 
@@ -60,7 +61,7 @@ Full stack:
 docker compose up --build
 ```
 
-Open the frontend at `http://localhost:5173`. Click `开始对话`, grant camera and microphone permission, then use `语音提问` or the text composer. Each turn sends the recognized text and one camera frame to the backend.
+Open the frontend at `http://localhost:5173`. Click `开始对话`, grant camera and microphone permission, then speak naturally. The backend assistant participant listens through LiveKit, applies the configured media policy for camera-frame sampling, and sends realtime captions/status/audio events back to the page. The active UI only exposes `开始`, `结束`, and `打断`.
 
 The compose setup defaults to `AI_PROVIDER=mock` so the app can run without Bailian credentials. To use Bailian, create a local `.env` from `backend/.env.example` or set equivalent Compose environment variables:
 
@@ -74,6 +75,8 @@ The compose setup defaults to `AI_PROVIDER=mock` so the app can run without Bail
 - `BAILIAN_VISION_MODEL`
 
 When a configured Bailian application ID is unavailable or returns access denied, the backend automatically falls back to Bailian's OpenAI-compatible model endpoint using `BAILIAN_TEXT_MODEL` for text-only turns and `BAILIAN_VISION_MODEL` when a camera frame is provided.
+
+The automatic conversation path uses the realtime provider adapter. `/api/v1/assistant/turn` remains available as a debug fallback but is not used by the primary frontend flow.
 
 ## PR and Commit Guidance
 
