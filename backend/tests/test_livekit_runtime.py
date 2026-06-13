@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from PIL import Image
@@ -8,7 +9,7 @@ from PIL import Image
 from sighttalk_api.agent.context import AgentSessionContext
 from sighttalk_api.agent.lifecycle import AgentLifecycle
 from sighttalk_api.agent.livekit_runtime import encode_jpeg_under_limit
-from sighttalk_api.providers.base import ImageFrame
+from sighttalk_api.providers.base import ImageFrame, ProviderEvent
 from sighttalk_api.schemas.livekit import MediaPolicy
 
 
@@ -45,6 +46,7 @@ async def test_lifecycle_waits_for_provider_ready_before_audio() -> None:
     assert tooling.audio_chunks == []
 
     lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
     await task
 
     assert tooling.audio_chunks == [b"audio"]
@@ -56,6 +58,7 @@ async def test_lifecycle_waits_for_first_provider_audio_before_image() -> None:
     tooling = FakeTooling(context)
     lifecycle = AgentLifecycle(context=context, tooling=tooling)  # type: ignore[arg-type]
     lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
     frame = ImageFrame(
         data=b"image",
         mime_type="image/jpeg",
@@ -92,6 +95,83 @@ async def test_lifecycle_publishes_single_terminal_error() -> None:
     assert errors[0]["message"] == "first"
 
 
+async def test_lifecycle_pauses_input_until_assistant_playout_finishes() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+            ProviderEvent(type="response_done", message_id="assistant-1"),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    await asyncio.sleep(0)
+    await lifecycle.handle_audio_chunk(b"dropped", sample_rate=16_000)
+    await lifecycle.handle_image_frame(
+        ImageFrame(data=b"dropped-image", mime_type="image/jpeg", width=10, height=10)
+    )
+
+    assert execution.played_audio == [b"\0\0"]
+    assert tooling.audio_chunks == []
+    assert tooling.image_frames == []
+    assert [event["status"] for event in execution.events if event["type"] == "agent.status"] == [
+        "speaking"
+    ]
+
+    execution.playout_done.set()
+    assert lifecycle._playback_completion_task is not None  # noqa: SLF001
+    await lifecycle._playback_completion_task  # noqa: SLF001
+    await lifecycle.handle_audio_chunk(b"accepted", sample_rate=16_000)
+
+    assert tooling.audio_chunks == [b"accepted"]
+    assert execution.events[-2]["type"] == "response.done"
+    assert execution.events[-2]["audio_playback_complete"] is True
+    assert execution.events[-1]["status"] == "listening"
+
+
+async def test_lifecycle_interrupt_reenables_input_during_assistant_playback() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+    await lifecycle.handle_audio_chunk(b"accepted", sample_rate=16_000)
+
+    assert execution.interrupted
+    assert tooling.control_messages == [b'{"type":"client.interrupt"}']
+    assert tooling.audio_chunks == [b"accepted"]
+    assert execution.events[-2]["status"] == "interrupted"
+    assert execution.events[-1]["status"] == "listening"
+
+
 class FakeTooling:
     def __init__(self, context: AgentSessionContext | None = None) -> None:
         self.context = context
@@ -110,6 +190,9 @@ class FakeTooling:
     async def close(self) -> None:
         return None
 
+    def schedule_memory_flush(self) -> None:
+        return None
+
     def events(self) -> Any:
         raise AssertionError("events should not be called")
 
@@ -123,3 +206,63 @@ class FakeExecution:
 
     async def stop(self) -> None:
         return None
+
+
+class PlaybackTooling(FakeTooling):
+    def __init__(self, events: list[ProviderEvent]) -> None:
+        super().__init__()
+        self._events = events
+        self.control_messages: list[bytes] = []
+
+    async def handle_control_message(self, data: bytes) -> dict[str, Any] | None:
+        self.control_messages.append(data)
+        return self.context_event("listening")
+
+    async def handle_provider_event(self, event: ProviderEvent) -> dict[str, Any] | None:
+        if event.type == "audio_delta":
+            return {
+                "type": "audio.delta",
+                "session_id": "room-1",
+                "timestamp": "now",
+                "message_id": event.message_id,
+                "mime_type": event.mime_type,
+                "audio": "",
+            }
+        if event.type == "response_done":
+            return {
+                "type": "response.done",
+                "session_id": "room-1",
+                "timestamp": "now",
+                "message_id": event.message_id,
+                "audio_playback_complete": False,
+            }
+        return None
+
+    def context_event(self, status: str) -> dict[str, Any]:
+        return {
+            "type": "agent.status",
+            "session_id": "room-1",
+            "timestamp": "now",
+            "status": status,
+        }
+
+    async def events(self) -> AsyncIterator[ProviderEvent]:
+        for event in self._events:
+            yield event
+
+
+class PlaybackExecution(FakeExecution):
+    def __init__(self) -> None:
+        super().__init__()
+        self.played_audio: list[bytes] = []
+        self.playout_done = asyncio.Event()
+        self.interrupted = False
+
+    async def play_assistant_audio(self, audio: bytes) -> None:
+        self.played_audio.append(audio)
+
+    async def wait_for_assistant_playout(self) -> None:
+        await self.playout_done.wait()
+
+    async def interrupt_playback(self) -> None:
+        self.interrupted = True

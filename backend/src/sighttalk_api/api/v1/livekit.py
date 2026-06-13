@@ -1,3 +1,5 @@
+"""LiveKit session management API routes."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -25,6 +27,7 @@ router = APIRouter(prefix="/livekit", tags=["livekit"])
 
 
 def _make_identity(prefix: str) -> str:
+    """Create a time-sortable participant or room identity."""
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S%f")
     return f"{prefix}-{timestamp}"
 
@@ -35,6 +38,7 @@ async def create_session(
     settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> CreateLiveKitSessionResponse:
+    """Create a LiveKit room, issue a participant token, and register session state."""
     try:
         settings.validate_for_session()
     except ValueError as exc:
@@ -90,6 +94,7 @@ async def end_session(
     request: EndLiveKitSessionRequest,
     current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> EndLiveKitSessionResponse:
+    """Stop an owned assistant session and release the registry record."""
     record = get_session_registry().get(room_name)
     if record is not None and record.user_id != current_user.user_id:
         raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
@@ -104,6 +109,7 @@ async def start_agent_session(
     settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> dict[str, str]:
+    """Start the assistant participant for an existing user-owned room."""
     record = get_session_registry().get(room_name)
     if record is None or record.user_id != current_user.user_id:
         raise AppError("SESSION_NOT_FOUND", "Session not found", status_code=404)
@@ -132,6 +138,8 @@ async def start_agent_session(
         media_policy=record.media_policy,
         user_id=record.user_id,
     )
+    # Publish initial status and usage events so the frontend can render immediately
+    # while the assistant participant is joining and provider setup completes.
     await messenger.send_json(
         room_name=room_name,
         topic="sighttalk.agent",
@@ -176,6 +184,7 @@ async def send_mock_events(
     settings: Annotated[Settings, Depends(get_settings)],
     current_user: Annotated[StoredUser, Depends(get_current_user)],
 ) -> dict[str, str]:
+    """Send deterministic agent events for local mock-provider demos."""
     if settings.ai_provider != "mock":
         raise AppError(
             "MOCK_PROVIDER_DISABLED",

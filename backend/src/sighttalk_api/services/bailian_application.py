@@ -1,3 +1,5 @@
+"""Bailian application and compatible-model single-turn client."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -9,6 +11,8 @@ from sighttalk_api.core.errors import AppError
 
 
 class BailianApplicationClient:
+    """Calls Bailian non-realtime completion APIs for debug fallback turns."""
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
@@ -19,6 +23,7 @@ class BailianApplicationClient:
         image_data_url: str | None = None,
         session_id: str | None = None,
     ) -> tuple[str, str | None]:
+        """Run a prompt through the configured application or compatible API."""
         app_error: AppError | None = None
         app_id = self._settings.bailian_application_id
         if app_id:
@@ -54,6 +59,7 @@ class BailianApplicationClient:
         image_data_url: str | None,
         session_id: str | None,
     ) -> tuple[str, str | None]:
+        """Call the Bailian application completion endpoint."""
         input_payload: dict[str, Any] = {"prompt": prompt}
         if session_id:
             input_payload["session_id"] = session_id
@@ -91,6 +97,7 @@ class BailianApplicationClient:
         prompt: str,
         image_data_url: str | None,
     ) -> tuple[str, str | None]:
+        """Call the OpenAI-compatible chat completion endpoint."""
         model = (
             self._settings.bailian_vision_model
             if image_data_url
@@ -147,6 +154,7 @@ class BailianApplicationClient:
 
 
 def _error_message(response: httpx.Response) -> str:
+    """Extract a useful provider error message from a failed HTTP response."""
     try:
         payload = response.json()
     except ValueError:

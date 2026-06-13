@@ -1,3 +1,5 @@
+"""File-backed authentication services for local SightTalk deployments."""
+
 from __future__ import annotations
 
 import base64
@@ -25,6 +27,8 @@ JWT_ALGORITHM = "HS256"
 
 @dataclass(frozen=True)
 class PasswordHash:
+    """Stored password hash metadata and digest."""
+
     algorithm: str
     iterations: int
     salt: str
@@ -33,12 +37,15 @@ class PasswordHash:
 
 @dataclass(frozen=True)
 class StoredUser:
+    """Persisted user record used by API authorization dependencies."""
+
     user_id: str
     email: str
     created_at: datetime
     password_hash: PasswordHash
 
     def profile(self) -> UserProfile:
+        """Return the public user profile without password hash material."""
         return UserProfile(
             user_id=self.user_id,
             email=self.email,
@@ -47,7 +54,10 @@ class StoredUser:
 
 
 class PasswordHasher:
+    """PBKDF2 password hashing and verification helper."""
+
     def hash_password(self, password: str) -> PasswordHash:
+        """Hash a plaintext password with a per-password random salt."""
         salt = os.urandom(16)
         digest = hashlib.pbkdf2_hmac(
             "sha256",
@@ -63,6 +73,7 @@ class PasswordHasher:
         )
 
     def verify_password(self, password: str, password_hash: PasswordHash) -> bool:
+        """Verify a plaintext password using constant-time digest comparison."""
         if password_hash.algorithm != PASSWORD_ALGORITHM:
             return False
         try:
@@ -80,11 +91,18 @@ class PasswordHasher:
 
 
 class UserStore:
+    """Thread-safe JSON user store for single-node deployments.
+
+    The store intentionally avoids retaining users in memory between calls so tests
+    and local development can observe file changes deterministically.
+    """
+
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir / "users.json"
         self._lock = Lock()
 
     def create_user(self, *, email: str, password_hash: PasswordHash) -> StoredUser:
+        """Create a user, enforcing normalized email uniqueness."""
         normalized_email = normalize_email(email)
         with self._lock:
             users = self._read_users()
@@ -100,6 +118,7 @@ class UserStore:
             return user
 
     def get_by_email(self, email: str) -> StoredUser | None:
+        """Find a user by normalized email address."""
         normalized_email = normalize_email(email)
         with self._lock:
             return next(
@@ -108,10 +127,12 @@ class UserStore:
             )
 
     def get_by_id(self, user_id: str) -> StoredUser | None:
+        """Find a user by stable user id."""
         with self._lock:
             return next((user for user in self._read_users() if user.user_id == user_id), None)
 
     def _read_users(self) -> list[StoredUser]:
+        """Read valid user records and skip malformed persisted entries."""
         if not self._path.exists():
             return []
         try:
@@ -145,6 +166,7 @@ class UserStore:
         return users
 
     def _write_users(self, users: list[StoredUser]) -> None:
+        """Atomically replace the user database file."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "users": [
@@ -165,12 +187,15 @@ class UserStore:
 
 
 class AuthService:
+    """Application authentication facade used by API routes."""
+
     def __init__(self, *, settings: Settings, user_store: UserStore) -> None:
         self._settings = settings
         self._user_store = user_store
         self._password_hasher = PasswordHasher()
 
     def register(self, *, email: str, password: str) -> AuthResponse:
+        """Register a new account and return an access token."""
         user = self._user_store.create_user(
             email=email,
             password_hash=self._password_hasher.hash_password(password),
@@ -178,12 +203,14 @@ class AuthService:
         return self._auth_response_for(user)
 
     def login(self, *, email: str, password: str) -> AuthResponse:
+        """Authenticate credentials and return a fresh access token."""
         user = self._user_store.get_by_email(email)
         if user is None or not self._password_hasher.verify_password(password, user.password_hash):
             raise AppError("INVALID_CREDENTIALS", "Invalid email or password", status_code=401)
         return self._auth_response_for(user)
 
     def authenticate_token(self, token: str) -> StoredUser:
+        """Validate a bearer token and resolve the stored user."""
         try:
             payload: dict[str, Any] = jwt.decode(
                 token,
@@ -201,6 +228,7 @@ class AuthService:
         return user
 
     def _auth_response_for(self, user: StoredUser) -> AuthResponse:
+        """Issue a signed JWT and pair it with the public profile."""
         expires_at = datetime.now(tz=UTC) + timedelta(
             seconds=self._settings.auth_token_ttl_seconds
         )
@@ -222,4 +250,5 @@ class AuthService:
 
 
 def normalize_email(email: str) -> str:
+    """Normalize email addresses for lookup and uniqueness checks."""
     return email.strip().lower()

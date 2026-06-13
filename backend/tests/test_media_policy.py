@@ -37,5 +37,5 @@ def test_derive_mode_policy_changes_fps() -> None:
     )
 
     assert derive_mode_policy(base, "economy").max_video_fps == 0.2
-    assert derive_mode_policy(base, "balanced").max_video_fps == 1.0
-    assert derive_mode_policy(base, "accurate").max_video_fps == 2.0
+    assert derive_mode_policy(base, "balanced").max_video_fps == 0.5
+    assert derive_mode_policy(base, "accurate").max_video_fps == 1.0

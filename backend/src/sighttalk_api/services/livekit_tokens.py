@@ -1,3 +1,5 @@
+"""LiveKit participant token generation."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -6,6 +8,8 @@ from livekit import api
 
 
 class LiveKitTokenService:
+    """Creates constrained LiveKit room tokens for browser and assistant users."""
+
     def __init__(self, api_key: str, api_secret: str, ttl_seconds: int) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
@@ -18,6 +22,7 @@ class LiveKitTokenService:
         participant_identity: str,
         display_name: str | None = None,
     ) -> str:
+        """Create a JWT that grants publish/subscribe/data access to one room."""
         token = (
             api.AccessToken(self._api_key, self._api_secret)
             .with_identity(participant_identity)

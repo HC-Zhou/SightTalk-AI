@@ -1,3 +1,5 @@
+"""LiveKit room lifecycle helpers."""
+
 from __future__ import annotations
 
 from livekit import api
@@ -7,12 +9,15 @@ from sighttalk_api.services.livekit_messenger import livekit_http_url
 
 
 class LiveKitRoomService:
+    """Ensures rooms exist before issuing participant tokens."""
+
     def __init__(self, *, url: str, api_key: str, api_secret: str) -> None:
         self._url = livekit_http_url(url)
         self._api_key = api_key
         self._api_secret = api_secret
 
     async def ensure_room(self, *, room_name: str) -> None:
+        """Create a LiveKit room, treating pre-existing rooms as success."""
         client = api.LiveKitAPI(
             url=self._url,
             api_key=self._api_key,

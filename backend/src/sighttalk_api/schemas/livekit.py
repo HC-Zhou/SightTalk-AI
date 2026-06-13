@@ -1,3 +1,5 @@
+"""LiveKit session API schemas shared by backend and frontend contracts."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,6 +11,8 @@ MediaMode = Literal["economy", "balanced", "accurate"]
 
 
 class MediaPolicy(BaseModel):
+    """Backend camera/audio policy returned to the browser for visibility."""
+
     mode: MediaMode
     max_video_fps: float
     max_jpeg_edge: int
@@ -17,11 +21,15 @@ class MediaPolicy(BaseModel):
 
 
 class CreateLiveKitSessionRequest(BaseModel):
+    """Request body for creating a browser participant LiveKit session."""
+
     display_name: str | None = None
     media_mode: MediaMode | None = None
 
 
 class CreateLiveKitSessionResponse(BaseModel):
+    """LiveKit join data and assistant session metadata."""
+
     room_name: str
     participant_identity: str
     participant_token: str
@@ -32,9 +40,13 @@ class CreateLiveKitSessionResponse(BaseModel):
 
 
 class EndLiveKitSessionRequest(BaseModel):
+    """Request body for ending a user-owned LiveKit session."""
+
     participant_identity: str
 
 
 class EndLiveKitSessionResponse(BaseModel):
+    """Idempotent session end response."""
+
     status: Literal["ended"]
     room_name: str

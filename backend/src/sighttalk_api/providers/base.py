@@ -1,3 +1,5 @@
+"""Provider-neutral contracts for realtime AI services."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -7,6 +9,8 @@ from typing import Literal, Protocol
 
 @dataclass(frozen=True)
 class ProviderSessionConfig:
+    """Immutable configuration required to open a provider session."""
+
     session_id: str
     model: str
     workspace_id: str
@@ -14,7 +18,24 @@ class ProviderSessionConfig:
 
 
 @dataclass(frozen=True)
+class ProviderContext:
+    """Provider-ready prompt/context update for manual response flows."""
+
+    system_prompt: str
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    """Feature flags exposed by provider adapters."""
+
+    supports_manual_response: bool = False
+    supports_context_update: bool = False
+
+
+@dataclass(frozen=True)
 class AudioChunk:
+    """Provider-ready microphone audio chunk."""
+
     data: bytes
     sample_rate: int
     mime_type: str = "audio/pcm"
@@ -22,6 +43,8 @@ class AudioChunk:
 
 @dataclass(frozen=True)
 class ImageFrame:
+    """Provider-ready camera frame after backend sampling and JPEG encoding."""
+
     data: bytes
     mime_type: str
     width: int
@@ -30,6 +53,8 @@ class ImageFrame:
 
 @dataclass(frozen=True)
 class ControlEvent:
+    """Provider-neutral control command from the frontend."""
+
     type: Literal["interrupt", "mode_update"]
     value: str | None = None
 
@@ -47,6 +72,8 @@ ProviderEventType = Literal[
 
 @dataclass(frozen=True)
 class ProviderEvent:
+    """Normalized event emitted by provider adapters."""
+
     type: ProviderEventType
     text: str = ""
     speaker: Literal["user", "assistant"] = "assistant"
@@ -59,13 +86,24 @@ class ProviderEvent:
 
 
 class AIProvider(Protocol):
+    """Realtime AI provider interface used by the agent layer."""
+
+    def capabilities(self) -> ProviderCapabilities:
+        raise NotImplementedError
+
     async def connect(self, session: ProviderSessionConfig) -> None:
+        raise NotImplementedError
+
+    async def update_context(self, context: ProviderContext) -> None:
+        raise NotImplementedError
+
+    async def create_response(self) -> None:
         raise NotImplementedError
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         raise NotImplementedError
 
-    async def send_image(self, frame: ImageFrame) -> None:
+    async def send_image(self, frame: ImageFrame) -> bool:
         raise NotImplementedError
 
     async def send_control(self, event: ControlEvent) -> None:

@@ -48,9 +48,32 @@ export function useSightTalkSession(authToken?: string) {
   const [state, setState] = useState<SightTalkState>(initialState);
   const roomRef = useRef<Room | undefined>(undefined);
   const sessionRef = useRef<CreateLiveKitSessionResponse | undefined>(undefined);
+  const localStreamRef = useRef<MediaStream | undefined>(undefined);
   const assistantAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const audioMutedByInterruptRef = useRef(false);
+  const inputSuspendedByAssistantRef = useRef(false);
+  const micEnabledRef = useRef(true);
+  const cameraEnabledRef = useRef(true);
   const { stream, requestMedia, stopMedia } = useLocalMedia();
+
+  const syncLocalInputTracks = useCallback(() => {
+    const currentStream = localStreamRef.current;
+    const inputAllowed = !inputSuspendedByAssistantRef.current;
+    currentStream?.getAudioTracks().forEach((track) => {
+      track.enabled = inputAllowed && micEnabledRef.current;
+    });
+    currentStream?.getVideoTracks().forEach((track) => {
+      track.enabled = cameraEnabledRef.current;
+    });
+  }, []);
+
+  const setAssistantInputSuspended = useCallback(
+    (suspended: boolean) => {
+      inputSuspendedByAssistantRef.current = suspended;
+      syncLocalInputTracks();
+    },
+    [syncLocalInputTracks],
+  );
 
   const pauseAssistantAudio = useCallback(() => {
     audioMutedByInterruptRef.current = true;
@@ -100,6 +123,12 @@ export function useSightTalkSession(authToken?: string) {
     (event: RealtimeEvent) => {
       switch (event.type) {
         case 'agent.status':
+          if (event.status === 'speaking') {
+            setAssistantInputSuspended(true);
+          }
+          if (event.status === 'listening' || event.status === 'interrupted') {
+            setAssistantInputSuspended(false);
+          }
           setState((current) => ({ ...current, status: event.status }));
           break;
         case 'transcript.delta':
@@ -127,11 +156,15 @@ export function useSightTalkSession(authToken?: string) {
           }));
           break;
         case 'response.done':
+          if (event.audio_playback_complete) {
+            setAssistantInputSuspended(false);
+          }
+          break;
         case 'audio.delta':
           break;
       }
     },
-    [mergeMessage, resumeAssistantAudio],
+    [mergeMessage, resumeAssistantAudio, setAssistantInputSuspended],
   );
 
   const handleDataReceived = useCallback(
@@ -156,6 +189,10 @@ export function useSightTalkSession(authToken?: string) {
     const session = sessionRef.current;
     roomRef.current = undefined;
     sessionRef.current = undefined;
+    localStreamRef.current = undefined;
+    inputSuspendedByAssistantRef.current = false;
+    micEnabledRef.current = true;
+    cameraEnabledRef.current = true;
     assistantAudioElementsRef.current.forEach((element) => {
       element.pause();
       element.muted = false;
@@ -192,6 +229,11 @@ export function useSightTalkSession(authToken?: string) {
         throw new Error('Please sign in before starting a session');
       }
       const localStream = await requestMedia();
+      localStreamRef.current = localStream;
+      inputSuspendedByAssistantRef.current = false;
+      micEnabledRef.current = true;
+      cameraEnabledRef.current = true;
+      syncLocalInputTracks();
       setState((current) => ({ ...current, status: 'connecting' }));
       const session = await createLiveKitSession({ media_mode: state.mediaMode }, authToken);
       const room = new Room();
@@ -241,7 +283,14 @@ export function useSightTalkSession(authToken?: string) {
         },
       }));
     }
-  }, [authToken, handleDataReceived, requestMedia, state.mediaMode, stopMedia]);
+  }, [
+    authToken,
+    handleDataReceived,
+    requestMedia,
+    state.mediaMode,
+    stopMedia,
+    syncLocalInputTracks,
+  ]);
 
   const stop = useCallback(async () => {
     await cleanup();
@@ -272,25 +321,24 @@ export function useSightTalkSession(authToken?: string) {
       reliable: true,
       topic: CONTROL_TOPIC,
     });
+    setAssistantInputSuspended(false);
     pauseAssistantAudio();
     setState((current) => ({ ...current, status: 'interrupted' }));
-  }, [pauseAssistantAudio]);
+  }, [pauseAssistantAudio, setAssistantInputSuspended]);
 
   const toggleMic = useCallback(() => {
     const enabled = !state.micEnabled;
-    stream?.getAudioTracks().forEach((track) => {
-      track.enabled = enabled;
-    });
+    micEnabledRef.current = enabled;
+    syncLocalInputTracks();
     setState((current) => ({ ...current, micEnabled: enabled }));
-  }, [state.micEnabled, stream]);
+  }, [state.micEnabled, syncLocalInputTracks]);
 
   const toggleCamera = useCallback(() => {
     const enabled = !state.cameraEnabled;
-    stream?.getVideoTracks().forEach((track) => {
-      track.enabled = enabled;
-    });
+    cameraEnabledRef.current = enabled;
+    syncLocalInputTracks();
     setState((current) => ({ ...current, cameraEnabled: enabled }));
-  }, [state.cameraEnabled, stream]);
+  }, [state.cameraEnabled, syncLocalInputTracks]);
 
   return {
     ...state,

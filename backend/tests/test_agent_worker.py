@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 from sighttalk_api.agent.worker import AgentSession
-from sighttalk_api.providers.base import AudioChunk, ProviderEvent, ProviderSessionConfig
+from sighttalk_api.providers.base import (
+    AudioChunk,
+    ProviderContext,
+    ProviderEvent,
+    ProviderSessionConfig,
+)
 from sighttalk_api.providers.mock import MockRealtimeProvider
 from sighttalk_api.schemas.livekit import MediaPolicy
 
@@ -119,3 +124,14 @@ async def test_mock_provider_emits_events() -> None:
     event = await anext(event_stream)
 
     assert event.type == "status"
+
+
+async def test_provider_capability_defaults_keep_automatic_response_behavior() -> None:
+    provider = MockRealtimeProvider()
+
+    capabilities = provider.capabilities()
+    await provider.update_context(ProviderContext(system_prompt="updated"))
+    await provider.create_response()
+
+    assert not capabilities.supports_manual_response
+    assert not capabilities.supports_context_update

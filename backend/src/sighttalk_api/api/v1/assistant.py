@@ -1,3 +1,5 @@
+"""Debug fallback assistant route for non-realtime single-turn calls."""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -17,6 +19,7 @@ async def create_assistant_turn(
     request: AssistantTurnRequest,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AssistantTurnResponse:
+    """Run one Bailian assistant turn outside the primary LiveKit realtime path."""
     if settings.ai_provider != "bailian":
         raise AppError("PROVIDER_DISABLED", "Assistant turn endpoint requires AI_PROVIDER=bailian")
     try:

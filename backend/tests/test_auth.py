@@ -9,7 +9,7 @@ from sighttalk_api.main import create_app
 
 def make_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("SIGHTTALK_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AUTH_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "test-auth-secret-at-least-32-bytes")
     return TestClient(create_app())
 
 
