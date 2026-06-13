@@ -83,6 +83,9 @@ logs/
 playwright-report/
 test-results/
 
+# Local git worktrees
+.worktrees/
+
 # IDEs and editors
 .vscode/
 .idea/
