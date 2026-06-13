@@ -2,7 +2,7 @@ import { Room, RoomEvent } from 'livekit-client';
 import { useCallback, useRef, useState } from 'react';
 
 import { useLocalMedia } from '../media/useLocalMedia';
-import { createAssistantTurn, createLiveKitSession, endLiveKitSession } from './api';
+import { createLiveKitSession, endLiveKitSession, startLiveKitAgentSession } from './api';
 import {
   AGENT_TOPIC,
   CONTROL_TOPIC,
@@ -30,6 +30,7 @@ interface SightTalkState {
   error?: SightTalkError;
   micEnabled: boolean;
   cameraEnabled: boolean;
+  assistantAudioActive: boolean;
 }
 
 const initialState: SightTalkState = {
@@ -38,6 +39,7 @@ const initialState: SightTalkState = {
   messages: [],
   micEnabled: true,
   cameraEnabled: true,
+  assistantAudioActive: false,
 };
 
 type PublishData = (payload: Uint8Array, options: { reliable: boolean; topic: string }) => void;
@@ -46,16 +48,18 @@ export function useSightTalkSession() {
   const [state, setState] = useState<SightTalkState>(initialState);
   const roomRef = useRef<Room | undefined>(undefined);
   const sessionRef = useRef<CreateLiveKitSessionResponse | undefined>(undefined);
-  const bailianSessionIdRef = useRef<string | undefined>(undefined);
+  const assistantAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const { stream, requestMedia, stopMedia } = useLocalMedia();
 
   const mergeMessage = useCallback((event: Extract<RealtimeEvent, { text: string }>) => {
     setState((current) => {
       const existing = current.messages.find((message) => message.id === event.message_id);
+      const text =
+        existing && event.type === 'transcript.delta' ? `${existing.text}${event.text}` : event.text;
       const nextMessage: ConversationMessage = {
         id: event.message_id,
         speaker: event.speaker,
-        text: event.text,
+        text,
         final: event.type === 'transcript.done',
       };
       return {
@@ -63,7 +67,7 @@ export function useSightTalkSession() {
         messages: existing
           ? current.messages.map((message) =>
               message.id === event.message_id
-                ? { ...message, text: event.text, final: nextMessage.final }
+                ? { ...message, text, final: nextMessage.final }
                 : message,
             )
           : [...current.messages, nextMessage],
@@ -99,6 +103,7 @@ export function useSightTalkSession() {
           }));
           break;
         case 'response.done':
+        case 'audio.delta':
           break;
       }
     },
@@ -127,7 +132,13 @@ export function useSightTalkSession() {
     const session = sessionRef.current;
     roomRef.current = undefined;
     sessionRef.current = undefined;
-    bailianSessionIdRef.current = undefined;
+    assistantAudioElementsRef.current.forEach((element) => {
+      element.pause();
+      element.removeAttribute('src');
+      element.load();
+      element.remove();
+    });
+    assistantAudioElementsRef.current = [];
     if (room) {
       room.off(RoomEvent.DataReceived, handleDataReceived);
       room.disconnect();
@@ -154,6 +165,19 @@ export function useSightTalkSession() {
       roomRef.current = room;
       sessionRef.current = session;
       room.on(RoomEvent.DataReceived, handleDataReceived);
+      room.on(RoomEvent.TrackSubscribed, (track: unknown) => {
+        if (!isAttachableAudioTrack(track)) {
+          return;
+        }
+        const element = track.attach();
+        element.autoplay = true;
+        assistantAudioElementsRef.current.push(element);
+        document.body.appendChild(element);
+        void element.play().catch(() => {
+          // Browser autoplay rules can still require a user gesture; the Start click normally satisfies it.
+        });
+        setState((current) => ({ ...current, assistantAudioActive: true }));
+      });
       room.on(RoomEvent.Disconnected, () => {
         setState((current) =>
           current.status === 'ended' ? current : { ...current, status: 'ended' },
@@ -163,6 +187,9 @@ export function useSightTalkSession() {
       await Promise.all(
         localStream.getTracks().map((track) => room.localParticipant.publishTrack(track)),
       );
+      void startLiveKitAgentSession(session.room_name).catch(() => {
+        // Real provider sessions may publish their own initial status; this helper is non-critical.
+      });
       setState((current) => ({
         ...current,
         status: 'listening',
@@ -211,56 +238,7 @@ export function useSightTalkSession() {
       reliable: true,
       topic: CONTROL_TOPIC,
     });
-  }, []);
-
-  const sendTurn = useCallback(async (prompt: string, imageDataUrl?: string) => {
-    const session = sessionRef.current;
-    const text = prompt.trim();
-    if (!session || !text) {
-      return;
-    }
-    const userMessageId = `user-${Date.now()}`;
-    setState((current) => ({
-      ...current,
-      status: 'thinking',
-      error: undefined,
-      messages: [
-        ...current.messages,
-        { id: userMessageId, speaker: 'user', text, final: true },
-      ],
-    }));
-    try {
-      const response = await createAssistantTurn({
-        room_name: session.room_name,
-        prompt: text,
-        image_data_url: imageDataUrl,
-        bailian_session_id: bailianSessionIdRef.current,
-      });
-      bailianSessionIdRef.current = response.bailian_session_id;
-      const assistantMessageId = `assistant-${Date.now()}`;
-      setState((current) => ({
-        ...current,
-        status: 'listening',
-        messages: [
-          ...current.messages,
-          { id: assistantMessageId, speaker: 'assistant', text: response.text, final: true },
-        ],
-        cost: {
-          audioSeconds: current.cost?.audioSeconds ?? 0,
-          imageFramesSent: (current.cost?.imageFramesSent ?? 0) + (imageDataUrl ? 1 : 0),
-          mode: current.mediaMode,
-        },
-      }));
-    } catch (error) {
-      setState((current) => ({
-        ...current,
-        status: 'error',
-        error: {
-          code: 'ASSISTANT_TURN_FAILED',
-          message: error instanceof Error ? error.message : 'Assistant request failed',
-        },
-      }));
-    }
+    setState((current) => ({ ...current, status: 'interrupted' }));
   }, []);
 
   const toggleMic = useCallback(() => {
@@ -286,7 +264,6 @@ export function useSightTalkSession() {
     stop,
     setMediaMode,
     interrupt,
-    sendTurn,
     toggleMic,
     toggleCamera,
   };
@@ -300,8 +277,22 @@ export function statusLabel(status: SessionStatus | AgentStatus): string {
     listening: 'Listening',
     thinking: 'Thinking',
     speaking: 'Speaking',
+    interrupted: 'Interrupted',
     error: 'Error',
     ended: 'Ended',
   };
   return labels[status];
+}
+
+interface AttachableAudioTrack {
+  kind: string;
+  attach: () => HTMLMediaElement;
+}
+
+function isAttachableAudioTrack(track: unknown): track is AttachableAudioTrack {
+  if (typeof track !== 'object' || track === null) {
+    return false;
+  }
+  const candidate = track as Partial<AttachableAudioTrack>;
+  return candidate.kind === 'audio' && typeof candidate.attach === 'function';
 }

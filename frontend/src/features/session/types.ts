@@ -1,6 +1,13 @@
 export type MediaMode = 'economy' | 'balanced' | 'accurate';
 
-export type AgentStatus = 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error' | 'ended';
+export type AgentStatus =
+  | 'connecting'
+  | 'listening'
+  | 'thinking'
+  | 'speaking'
+  | 'interrupted'
+  | 'error'
+  | 'ended';
 
 export type SessionStatus = 'idle' | 'requesting-permission' | AgentStatus;
 
@@ -88,6 +95,13 @@ export interface ResponseDoneEvent extends BaseRealtimeEvent {
   audio_playback_complete: boolean;
 }
 
+export interface AudioDeltaEvent extends BaseRealtimeEvent {
+  type: 'audio.delta';
+  message_id: string;
+  mime_type: string;
+  audio: string;
+}
+
 export interface CostEstimateEvent extends BaseRealtimeEvent {
   type: 'cost.estimate';
   audio_seconds: number;
@@ -106,6 +120,7 @@ export type RealtimeEvent =
   | TranscriptDeltaEvent
   | TranscriptDoneEvent
   | ResponseDoneEvent
+  | AudioDeltaEvent
   | CostEstimateEvent
   | AgentErrorEvent;
 
