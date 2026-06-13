@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from typing import Any, Protocol
 
 from sighttalk_api.core.config import Settings
@@ -20,15 +20,15 @@ class HttpResponse(Protocol):
 
 
 class AsyncHttpClient(Protocol):
-    async def post(
+    def post(
         self,
         url: str,
         *,
         headers: dict[str, str],
         json: JsonObject,
-    ) -> HttpResponse: ...
+    ) -> Awaitable[HttpResponse]: ...
 
-    async def get(self, url: str) -> HttpResponse: ...
+    def get(self, url: str) -> Awaitable[HttpResponse]: ...
 
 
 def _join_url(base_url: str, path: str) -> str:
