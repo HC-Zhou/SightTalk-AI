@@ -2,10 +2,13 @@ import base64
 from typing import Any
 
 from sighttalk_api.ai.bailian_adapters import (
+    AsyncHttpClient,
     _audio_chunks_to_data_url,
     _extract_chat_content,
     _join_url,
+    _require_api_key,
 )
+from sighttalk_api.core.config import Settings
 from sighttalk_api.media.audio_buffer import AudioChunk
 
 
@@ -64,6 +67,18 @@ def test_extract_chat_content_reads_first_choice() -> None:
     payload = {"choices": [{"message": {"content": "你好"}}]}
 
     assert _extract_chat_content(payload) == "你好"
+
+
+def test_require_api_key_returns_stripped_key() -> None:
+    settings = Settings(bailian_api_key="  sk-test  ")
+
+    assert _require_api_key(settings) == "sk-test"
+
+
+def test_fake_async_client_matches_async_http_client_protocol() -> None:
+    client: AsyncHttpClient = FakeAsyncClient([FakeResponse({})])
+
+    assert client.gets == []
 
 
 def test_audio_chunks_to_data_url_joins_base64_payloads() -> None:
