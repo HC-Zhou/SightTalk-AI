@@ -9,7 +9,7 @@ export type CapturedFrame = {
 };
 
 export function useCameraSampler(policy: CapturePolicy | null) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | null>(null);
   const seqRef = useRef(0);
@@ -79,4 +79,3 @@ export function useCameraSampler(policy: CapturePolicy | null) {
 
   return { videoRef, status, errorMessage, start, stop };
 }
-
