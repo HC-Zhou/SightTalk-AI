@@ -1,5 +1,5 @@
 import { Room, RoomEvent } from 'livekit-client';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useLocalMedia } from '../media/useLocalMedia';
 import { createLiveKitSession, endLiveKitSession, startLiveKitAgentSession } from './api';
@@ -28,6 +28,7 @@ interface SightTalkState {
   messages: ConversationMessage[];
   cost?: CostEstimate;
   error?: SightTalkError;
+  diagnostics: SightTalkError[];
   micEnabled: boolean;
   cameraEnabled: boolean;
   assistantAudioActive: boolean;
@@ -37,6 +38,7 @@ const initialState: SightTalkState = {
   status: 'idle',
   mediaMode: 'balanced',
   messages: [],
+  diagnostics: [],
   micEnabled: true,
   cameraEnabled: true,
   assistantAudioActive: false,
@@ -53,6 +55,7 @@ export function useSightTalkSession(authToken?: string) {
   const audioMutedByInterruptRef = useRef(false);
   const micEnabledRef = useRef(true);
   const cameraEnabledRef = useRef(true);
+  const terminalCleanupRequestedRef = useRef(false);
   const { stream, requestMedia, stopMedia } = useLocalMedia();
 
   const syncLocalInputTracks = useCallback(() => {
@@ -113,13 +116,19 @@ export function useSightTalkSession(authToken?: string) {
     (event: RealtimeEvent) => {
       switch (event.type) {
         case 'agent.status':
-          setState((current) => ({ ...current, status: event.status }));
+          if (event.status === 'speaking') {
+            resumeAssistantAudio();
+          }
+          setState((current) => ({
+            ...current,
+            status:
+              event.status === 'interrupted' || (event.status === 'error' && current.session)
+                ? 'listening'
+                : event.status,
+          }));
           break;
         case 'transcript.delta':
         case 'transcript.done':
-          if (event.speaker === 'assistant') {
-            resumeAssistantAudio();
-          }
           mergeMessage(event);
           break;
         case 'cost.estimate':
@@ -132,12 +141,78 @@ export function useSightTalkSession(authToken?: string) {
             },
           }));
           break;
-        case 'error':
+        case 'diagnostic.error':
           setState((current) => ({
             ...current,
-            status: 'error',
-            error: { code: event.code, message: event.message },
+            diagnostics: [
+              ...current.diagnostics,
+              {
+                code: event.code,
+                message: event.message,
+                severity: event.severity,
+                surface: event.surface,
+              },
+            ],
           }));
+          break;
+        case 'session.terminal':
+          terminalCleanupRequestedRef.current = true;
+          setState((current) => ({
+            ...current,
+            status: 'ended',
+            error: undefined,
+            diagnostics: [
+              ...current.diagnostics,
+              {
+                code: event.code,
+                message: event.message,
+                severity: event.severity,
+                surface: event.surface,
+              },
+            ],
+          }));
+          break;
+        case 'error':
+          setState((current) => {
+            const activeConversation = Boolean(current.session) && current.status !== 'ended';
+            const terminal = event.severity === 'terminal' || event.surface === 'session';
+            if (activeConversation && !terminal) {
+              return {
+                ...current,
+                diagnostics: [
+                  ...current.diagnostics,
+                  {
+                    code: event.code,
+                    message: event.message,
+                    severity: event.severity,
+                    surface: event.surface,
+                  },
+                ],
+              };
+            }
+            if (activeConversation && terminal) {
+              terminalCleanupRequestedRef.current = true;
+              return {
+                ...current,
+                status: 'ended',
+                error: undefined,
+                diagnostics: [
+                  ...current.diagnostics,
+                  {
+                    code: event.code,
+                    message: event.message,
+                    severity: event.severity,
+                    surface: event.surface,
+                  },
+                ],
+              };
+            }
+            return {
+              ...current,
+              status: 'error',
+              error: { code: event.code, message: event.message },
+            };
+          });
           break;
         case 'response.done':
           break;
@@ -209,6 +284,7 @@ export function useSightTalkSession(authToken?: string) {
       messages: [],
       cost: undefined,
       error: undefined,
+      diagnostics: [],
       session: undefined,
       assistantAudioActive: false,
     }));
@@ -284,6 +360,19 @@ export function useSightTalkSession(authToken?: string) {
     setState((current) => ({ ...current, status: 'ended', session: undefined }));
   }, [cleanup]);
 
+  const releaseAfterTerminal = useCallback(async () => {
+    await cleanup();
+    setState((current) => ({ ...current, status: 'ended', session: undefined }));
+  }, [cleanup]);
+
+  useEffect(() => {
+    if (state.status !== 'ended' || !terminalCleanupRequestedRef.current) {
+      return;
+    }
+    terminalCleanupRequestedRef.current = false;
+    void releaseAfterTerminal();
+  }, [releaseAfterTerminal, state.status]);
+
   const setMediaMode = useCallback((mode: MediaMode) => {
     setState((current) => ({ ...current, mediaMode: mode }));
     const session = sessionRef.current;
@@ -309,7 +398,7 @@ export function useSightTalkSession(authToken?: string) {
       topic: CONTROL_TOPIC,
     });
     pauseAssistantAudio();
-    setState((current) => ({ ...current, status: 'interrupted' }));
+    setState((current) => ({ ...current, status: 'listening' }));
   }, [pauseAssistantAudio]);
 
   const toggleMic = useCallback(() => {
@@ -363,7 +452,7 @@ export function statusLabel(status: SessionStatus | AgentStatus): string {
     listening: 'Listening',
     thinking: 'Thinking',
     speaking: 'Speaking',
-    interrupted: 'Interrupted',
+    interrupted: 'Listening',
     error: 'Error',
     ended: 'Ended',
   };

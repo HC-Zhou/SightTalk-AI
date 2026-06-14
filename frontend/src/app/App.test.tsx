@@ -398,6 +398,12 @@ describe('App', () => {
 
     act(() => {
       room.emitData({
+        type: 'agent.status',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        status: 'speaking',
+      });
+      room.emitData({
         type: 'transcript.delta',
         session_id: 'sighttalk-test',
         timestamp: new Date().toISOString(),
@@ -419,6 +425,47 @@ describe('App', () => {
     expect(screen.queryByText('新的回答新的回答')).not.toBeInTheDocument();
     expect(audioElement.muted).toBe(false);
     expect(play).toHaveBeenCalled();
+  });
+
+  it('keeps active-call diagnostics out of visible error UI', async () => {
+    const { stream } = createStream();
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await signIn(user);
+
+    await user.click(screen.getByRole('button', { name: '开始' }));
+    const room = await latestRoom();
+
+    act(() => {
+      room.emitData({
+        type: 'diagnostic.error',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        diagnostic_id: 'diag-1',
+        severity: 'recoverable',
+        surface: 'diagnostic',
+        code: 'PROVIDER_CANCEL_FAILED',
+        message: 'provider cancel raced',
+      });
+      room.emitData({
+        type: 'error',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        code: 'PROVIDER_PROTOCOL_ERROR',
+        message: 'legacy recoverable error',
+      });
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('provider cancel raced')).not.toBeInTheDocument();
+    expect(screen.queryByText('legacy recoverable error')).not.toBeInTheDocument();
+    expect(screen.getByText('Listening')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '结束' })).toBeInTheDocument();
   });
 
   it('keeps local media enabled for voice barge-in during assistant audio', async () => {
@@ -475,6 +522,7 @@ describe('App', () => {
 
     expect(audio.enabled).toBe(true);
     expect(video.enabled).toBe(true);
+    expect(screen.getByText('Listening')).toBeInTheDocument();
   });
 
   it('stops session and releases local tracks', async () => {

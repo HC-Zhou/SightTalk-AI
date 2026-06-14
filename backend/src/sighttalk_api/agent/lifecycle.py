@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import suppress
 from typing import Any, Literal
 
 from sighttalk_api.agent.context import AgentSessionContext, utc_now
+from sighttalk_api.agent.dialogue import DialogueStabilityCoordinator, ProviderEventStamp
 from sighttalk_api.agent.execution import LiveKitExecution
 from sighttalk_api.agent.frames import Frame, interrupt_frame
 from sighttalk_api.agent.metrics import RealtimeMetrics
@@ -18,11 +20,18 @@ from sighttalk_api.agent.noise import (
 )
 from sighttalk_api.agent.tooling import AgentTooling
 from sighttalk_api.agent.vad import LocalVAD, LocalVADResult, pcm16_stats
-from sighttalk_api.providers.base import ImageFrame
+from sighttalk_api.providers.base import ImageFrame, ProviderEvent
 
 PCM16_BARGE_IN_RMS_THRESHOLD = 700.0
 PCM16_BARGE_IN_PEAK_THRESHOLD = 1_600
 CLIENT_INTERRUPT_CONTROL_MESSAGE = b'{"type":"client.interrupt"}'
+TERMINAL_PROVIDER_EVENT_CODES = {
+    "PROVIDER_CONFIGURATION_ERROR",
+    "PROVIDER_GOAWAY",
+    "PROVIDER_UNAVAILABLE",
+}
+
+logger = logging.getLogger(__name__)
 
 LifecycleState = Literal[
     "created",
@@ -66,6 +75,7 @@ class AgentLifecycle:
         self._playback_completion_task: asyncio.Task[None] | None = None
         self._vad = LocalVAD()
         self._metrics = RealtimeMetrics()
+        self._dialogue = DialogueStabilityCoordinator()
         self._noise_suppressor = NoiseSuppressor(
             NoiseSuppressionConfig(enabled=noise_suppression_enabled)
         )
@@ -104,9 +114,7 @@ class AgentLifecycle:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            await self.publish_event(
-                self.context.error_event("AGENT_RUNTIME_ERROR", str(exc))
-            )
+            await self._handle_terminal_error("AGENT_RUNTIME_ERROR", str(exc))
         finally:
             await self.stop()
 
@@ -202,17 +210,22 @@ class AgentLifecycle:
         """Continuously bridge provider events to LiveKit frontend events."""
         try:
             async for event in self.tooling.events():
+                stamp = self._dialogue.stamp_provider_event(event)
+                if self._is_stale_assistant_event(event, stamp):
+                    await self._publish_stale_event_diagnostic(event, stamp)
+                    continue
                 if (
                     event.type in {"transcript_delta", "transcript_done"}
                     and event.speaker == "user"
                 ):
                     await self._mark_user_turn_started(source="provider_transcript")
                 if self.execution is not None and event.type == "audio_delta" and event.audio:
-                    await self._begin_assistant_playback()
+                    if not await self._begin_assistant_playback(stamp):
+                        continue
                     await self.execution.play_assistant_audio(event.audio)
                 if event.type == "response_done" and self._assistant_playback_active:
                     self.tooling.schedule_memory_flush()
-                    self._schedule_playback_completion(event.message_id)
+                    self._schedule_playback_completion(event.message_id, stamp.response_epoch)
                     continue
                 if (
                     event.type == "status"
@@ -221,12 +234,11 @@ class AgentLifecycle:
                 ):
                     continue
                 if event.type == "error":
-                    await self._publish_metrics_trace(
-                        "provider.error",
-                        self._metrics.mark_provider_error(code=event.code),
-                    )
+                    await self._handle_provider_error_event(event, stamp)
+                    continue
                 payload = await self.tooling.handle_provider_event(event)
                 if payload is not None:
+                    self._stamp_payload(payload, stamp)
                     await self.publish_event(payload)
         except asyncio.CancelledError:
             raise
@@ -240,15 +252,51 @@ class AgentLifecycle:
             self._terminal_error_sent = True
             await self._publish_metrics_trace(
                 "provider.error",
-                self._metrics.mark_provider_error(code=code),
+                {
+                    **self._metrics.mark_provider_error(code=code),
+                    "severity": "terminal",
+                    "response_epoch": self._dialogue.response_epoch,
+                },
             )
-            await self.publish_event(self.context.error_event(code, message))
+            logger.error(
+                "Terminal realtime agent error",
+                extra={
+                    "session_id": self.context.session_id,
+                    "code": code,
+                    "response_epoch": self._dialogue.response_epoch,
+                },
+            )
+            await self.publish_event(
+                self.context.diagnostic_event(
+                    code,
+                    message,
+                    severity="terminal",
+                    surface="session",
+                    response_epoch=self._dialogue.response_epoch,
+                )
+            )
+            await self.publish_event(
+                self.context.terminal_event(
+                    code,
+                    message,
+                    response_epoch=self._dialogue.response_epoch,
+                )
+            )
         self._stopped.set()
 
-    async def _begin_assistant_playback(self) -> None:
+    async def _begin_assistant_playback(self, stamp: ProviderEventStamp) -> bool:
         """Pause user input while assistant audio is being played."""
+        if not self._dialogue.begin_playback(stamp.response_epoch):
+            await self._publish_stale_event_diagnostic(
+                ProviderEvent(
+                    type="audio_delta",
+                    message_id=stamp.response_id,
+                ),
+                stamp,
+            )
+            return False
         if self._assistant_playback_active:
-            return
+            return True
         self._assistant_playback_active = True
         self._input_enabled.clear()
         self._provider_audio_started.clear()
@@ -256,21 +304,35 @@ class AgentLifecycle:
         await self.publish_event(self.context.status_event("speaking"))
         await self._publish_metrics_trace(
             "assistant.first_audio",
-            self._metrics.mark_assistant_response_started(),
+            {
+                **self._metrics.mark_assistant_response_started(),
+                "response_epoch": stamp.response_epoch,
+                "response_id": stamp.response_id,
+            },
         )
+        return True
 
-    def _schedule_playback_completion(self, message_id: str) -> None:
+    def _schedule_playback_completion(self, message_id: str, response_epoch: int) -> None:
         """Restore user input after LiveKit has played queued assistant audio."""
         if self._playback_completion_task is not None and not self._playback_completion_task.done():
             return
-        task = asyncio.create_task(self._complete_playback_after_playout(message_id))
+        task = asyncio.create_task(
+            self._complete_playback_after_playout(message_id, response_epoch)
+        )
         self._playback_completion_task = task
         self._track_task(task)
         task.add_done_callback(self._clear_playback_completion_task)
 
-    async def _complete_playback_after_playout(self, message_id: str) -> None:
+    async def _complete_playback_after_playout(
+        self,
+        message_id: str,
+        response_epoch: int,
+    ) -> None:
         if self.execution is not None:
             await self.execution.wait_for_assistant_playout()
+        if not self._dialogue.complete_playback(response_epoch):
+            await self._publish_stale_completion_diagnostic(message_id, response_epoch)
+            return
         if not self._assistant_playback_active:
             return
         self._assistant_playback_active = False
@@ -279,9 +341,13 @@ class AgentLifecycle:
             self.state = "listening"
             await self._publish_metrics_trace(
                 "turn.complete",
-                self._metrics.mark_turn_completed(),
+                {
+                    **self._metrics.mark_turn_completed(),
+                    "response_epoch": response_epoch,
+                    "response_id": message_id,
+                },
             )
-            await self.publish_event(self._response_done_event(message_id))
+            await self.publish_event(self._response_done_event(message_id, response_epoch))
             await self.publish_event(self.context.status_event("listening"))
 
     async def _cancel_assistant_playback(self) -> None:
@@ -296,27 +362,55 @@ class AgentLifecycle:
 
     async def _interrupt_assistant_playback(self) -> None:
         """Stop assistant playback and return to listening for user speech."""
+        was_active = self._assistant_playback_active
+        interrupt_result = self._dialogue.interrupt(playback_active=was_active)
         await self._cancel_assistant_playback()
-        if self.execution is not None:
+        if was_active and self.execution is not None:
             await self.execution.interrupt_playback()
         self._input_enabled.set()
         self.state = "interrupted"
-        await self.publish_event(self.context.status_event("interrupted"))
+        await self._publish_metrics_trace(
+            "interrupt.epoch",
+            {
+                "previous_response_epoch": interrupt_result.previous_epoch,
+                "response_epoch": interrupt_result.response_epoch,
+                "epoch_advanced": interrupt_result.advanced,
+                "stale_events_dropped": self._dialogue.stale_events_dropped,
+            },
+        )
 
     async def _handle_interrupt_frame(self, frame: Frame) -> None:
         """Apply local interruption effects and notify the provider once."""
         reason = str(frame.payload.get("reason", "runtime"))
+        was_active = self._assistant_playback_active
         await self._publish_metrics_trace(
             "interrupt",
-            self._metrics.mark_interrupt(source=frame.source, reason=reason),
+            {
+                **self._metrics.mark_interrupt(source=frame.source, reason=reason),
+                "response_epoch": self._dialogue.response_epoch,
+                "playback_active": was_active,
+            },
         )
         await self._interrupt_assistant_playback()
+        if not was_active:
+            self.state = "listening"
+            await self.publish_event(self.context.status_event("listening"))
+            return
         try:
             event = await self.tooling.handle_control_message(CLIENT_INTERRUPT_CONTROL_MESSAGE)
         except RuntimeError as exc:
-            await self._handle_terminal_error("PROVIDER_UNAVAILABLE", str(exc))
+            await self._publish_diagnostic_error(
+                "PROVIDER_CANCEL_FAILED",
+                str(exc),
+                response_epoch=self._dialogue.response_epoch,
+                fields={"reason": reason, "source": frame.source},
+            )
+            self.state = "listening"
+            await self.publish_event(self.context.status_event("listening"))
             return
         if event is None:
+            self.state = "listening"
+            await self.publish_event(self.context.status_event("listening"))
             return
         if event.get("type") == "agent.status":
             status = str(event.get("status", "listening"))
@@ -364,12 +458,137 @@ class AgentLifecycle:
         if self._playback_completion_task is task:
             self._playback_completion_task = None
 
-    def _response_done_event(self, message_id: str) -> dict[str, Any]:
+    async def _handle_provider_error_event(
+        self,
+        event: ProviderEvent,
+        stamp: ProviderEventStamp,
+    ) -> None:
+        code = event.code or "PROVIDER_PROTOCOL_ERROR"
+        if code in TERMINAL_PROVIDER_EVENT_CODES:
+            await self._handle_terminal_error(code, event.message or "Provider error")
+            return
+        await self._publish_metrics_trace(
+            "provider.error",
+            {
+                **self._metrics.mark_provider_error(code=code),
+                "severity": "recoverable",
+                "response_epoch": stamp.response_epoch,
+                "response_id": stamp.response_id,
+            },
+        )
+        await self._publish_diagnostic_error(
+            code,
+            event.message or "Provider error",
+            response_epoch=stamp.response_epoch,
+            fields={"response_id": stamp.response_id},
+        )
+
+    def _is_stale_assistant_event(
+        self,
+        event: ProviderEvent,
+        stamp: ProviderEventStamp,
+    ) -> bool:
+        if not stamp.stale:
+            return False
+        return event.type in {"audio_delta", "response_done"} or (
+            event.type in {"transcript_delta", "transcript_done"}
+            and event.speaker == "assistant"
+        )
+
+    async def _publish_stale_event_diagnostic(
+        self,
+        event: ProviderEvent,
+        stamp: ProviderEventStamp,
+    ) -> None:
+        dropped = self._dialogue.mark_stale_event_dropped()
+        await self._publish_metrics_trace(
+            "provider.stale_event_dropped",
+            {
+                "provider_event_type": event.type,
+                "response_epoch": stamp.response_epoch,
+                "active_response_epoch": self._dialogue.response_epoch,
+                "response_id": stamp.response_id,
+                "stale_events_dropped": dropped,
+            },
+        )
+        await self._publish_diagnostic_error(
+            "STALE_PROVIDER_EVENT_DROPPED",
+            "Dropped stale provider event from an interrupted response",
+            response_epoch=stamp.response_epoch,
+            fields={
+                "provider_event_type": event.type,
+                "active_response_epoch": self._dialogue.response_epoch,
+                "response_id": stamp.response_id,
+                "stale_events_dropped": dropped,
+            },
+        )
+
+    async def _publish_stale_completion_diagnostic(
+        self,
+        message_id: str,
+        response_epoch: int,
+    ) -> None:
+        await self._publish_diagnostic_error(
+            "STALE_RESPONSE_COMPLETION_DROPPED",
+            "Dropped stale response completion from an interrupted response",
+            response_epoch=response_epoch,
+            fields={
+                "active_response_epoch": self._dialogue.response_epoch,
+                "response_id": message_id,
+                "stale_events_dropped": self._dialogue.stale_events_dropped,
+            },
+        )
+
+    async def _publish_diagnostic_error(
+        self,
+        code: str,
+        message: str,
+        *,
+        response_epoch: int | None = None,
+        fields: dict[str, Any] | None = None,
+    ) -> None:
+        logger.warning(
+            "Recoverable realtime diagnostic",
+            extra={
+                "session_id": self.context.session_id,
+                "code": code,
+                "response_epoch": response_epoch,
+            },
+        )
+        await self.publish_event(
+            self.context.diagnostic_event(
+                code,
+                message,
+                severity="recoverable",
+                surface="diagnostic",
+                response_epoch=response_epoch,
+                fields=fields,
+            )
+        )
+
+    def _stamp_payload(
+        self,
+        payload: dict[str, Any],
+        stamp: ProviderEventStamp,
+    ) -> None:
+        if payload.get("type") in {
+            "audio.delta",
+            "transcript.delta",
+            "transcript.done",
+            "response.done",
+        }:
+            payload["response_epoch"] = stamp.response_epoch
+            if stamp.response_id:
+                payload["response_id"] = stamp.response_id
+
+    def _response_done_event(self, message_id: str, response_epoch: int) -> dict[str, Any]:
         return {
             "type": "response.done",
             "session_id": self.context.session_id,
             "timestamp": utc_now(),
             "message_id": message_id,
+            "response_id": message_id,
+            "response_epoch": response_epoch,
             "audio_playback_complete": True,
         }
 

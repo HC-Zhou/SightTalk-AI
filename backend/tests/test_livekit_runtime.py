@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from PIL import Image
@@ -30,6 +30,14 @@ def make_context() -> AgentSessionContext:
 
 def pcm16_chunk(sample: int, *, count: int = 1_600) -> bytes:
     return b"".join(sample.to_bytes(2, "little", signed=True) for _ in range(count))
+
+
+async def wait_for(predicate: Callable[[], bool], *, attempts: int = 20) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition was not met")
 
 
 def test_encode_jpeg_under_limit_compresses_large_frame() -> None:
@@ -95,9 +103,12 @@ async def test_lifecycle_publishes_single_terminal_error() -> None:
     await lifecycle._handle_terminal_error("PROVIDER_UNAVAILABLE", "first")  # noqa: SLF001
     await lifecycle._handle_terminal_error("PROVIDER_UNAVAILABLE", "second")  # noqa: SLF001
 
-    errors = [event for event in execution.events if event["type"] == "error"]
-    assert len(errors) == 1
-    assert errors[0]["message"] == "first"
+    terminals = [event for event in execution.events if event["type"] == "session.terminal"]
+    diagnostics = [event for event in execution.events if event["type"] == "diagnostic.error"]
+    assert len(terminals) == 1
+    assert terminals[0]["message"] == "first"
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["severity"] == "terminal"
 
 
 async def test_lifecycle_skips_silent_audio_and_images_until_playout_finishes() -> None:
@@ -175,7 +186,7 @@ async def test_lifecycle_voice_barge_in_interrupts_assistant_playback() -> None:
     assert tooling.control_messages == [b'{"type":"client.interrupt"}']
     assert tooling.audio_chunks == [speech]
     statuses = [event["status"] for event in execution.events if event["type"] == "agent.status"]
-    assert statuses == ["speaking", "interrupted", "listening"]
+    assert statuses == ["speaking", "listening"]
     trace_names = [event["name"] for event in execution.events if event["type"] == "metrics.trace"]
     assert "vad.speech_started" in trace_names
     assert "interrupt" in trace_names
@@ -209,8 +220,125 @@ async def test_lifecycle_interrupt_reenables_input_during_assistant_playback() -
     assert execution.interrupted
     assert tooling.control_messages == [b'{"type":"client.interrupt"}']
     assert tooling.audio_chunks == [accepted]
-    assert execution.events[-2]["status"] == "interrupted"
     assert execution.events[-1]["status"] == "listening"
+
+
+async def test_lifecycle_repeated_interrupts_cancel_playback_once() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+    await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+
+    assert execution.interrupt_count == 1
+    assert tooling.control_messages == [b'{"type":"client.interrupt"}']
+    statuses = [event["status"] for event in execution.events if event["type"] == "agent.status"]
+    assert statuses == ["speaking", "listening", "listening"]
+
+
+async def test_lifecycle_drops_stale_audio_and_completion_after_interrupt() -> None:
+    context = make_context()
+    tooling = QueuedPlaybackTooling()
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+    pump_task = asyncio.create_task(lifecycle._pump_provider_events())  # noqa: SLF001
+
+    await tooling.emit(
+        ProviderEvent(type="audio_delta", audio=b"old-audio", message_id="assistant-1")
+    )
+    await wait_for(lambda: execution.played_audio == [b"old-audio"])
+    await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+    await tooling.emit(
+        ProviderEvent(type="audio_delta", audio=b"late-audio", message_id="assistant-1")
+    )
+    await tooling.emit(ProviderEvent(type="response_done", message_id="assistant-1"))
+    await tooling.close_stream()
+    await pump_task
+
+    assert execution.played_audio == [b"old-audio"]
+    diagnostics = [event for event in execution.events if event["type"] == "diagnostic.error"]
+    assert {event["code"] for event in diagnostics} >= {"STALE_PROVIDER_EVENT_DROPPED"}
+
+
+async def test_lifecycle_recoverable_provider_error_is_diagnostic_only() -> None:
+    context = make_context()
+    tooling = PlaybackTooling(
+        [
+            ProviderEvent(
+                type="error",
+                code="PROVIDER_PROTOCOL_ERROR",
+                message="cancel raced with provider",
+            )
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+
+    assert lifecycle.state == "created"
+    assert not [event for event in execution.events if event["type"] == "session.terminal"]
+    diagnostics = [event for event in execution.events if event["type"] == "diagnostic.error"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["severity"] == "recoverable"
+
+
+async def test_lifecycle_provider_cancel_failure_is_diagnostic_only() -> None:
+    context = make_context()
+    tooling = FailingInterruptTooling(
+        [
+            ProviderEvent(
+                type="audio_delta",
+                audio=b"\0\0",
+                message_id="assistant-1",
+            ),
+        ]
+    )
+    execution = PlaybackExecution()
+    lifecycle = AgentLifecycle(
+        context=context,
+        tooling=tooling,  # type: ignore[arg-type]
+        execution=execution,  # type: ignore[arg-type]
+    )
+    lifecycle._provider_ready.set()  # noqa: SLF001
+    lifecycle._input_enabled.set()  # noqa: SLF001
+
+    await lifecycle._pump_provider_events()  # noqa: SLF001
+    await lifecycle.handle_control_message(b'{"type":"client.interrupt"}')
+
+    assert lifecycle.state == "listening"
+    assert not [event for event in execution.events if event["type"] == "session.terminal"]
+    diagnostics = [event for event in execution.events if event["type"] == "diagnostic.error"]
+    assert diagnostics[-1]["code"] == "PROVIDER_CANCEL_FAILED"
 
 
 async def test_lifecycle_suppresses_noise_before_provider_audio() -> None:
@@ -362,12 +490,38 @@ class PlaybackTooling(FakeTooling):
             yield event
 
 
+class QueuedPlaybackTooling(PlaybackTooling):
+    def __init__(self) -> None:
+        super().__init__([])
+        self._queue: asyncio.Queue[ProviderEvent | None] = asyncio.Queue()
+
+    async def emit(self, event: ProviderEvent) -> None:
+        await self._queue.put(event)
+
+    async def close_stream(self) -> None:
+        await self._queue.put(None)
+
+    async def events(self) -> AsyncIterator[ProviderEvent]:
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                return
+            yield event
+
+
+class FailingInterruptTooling(PlaybackTooling):
+    async def handle_control_message(self, data: bytes) -> dict[str, Any] | None:
+        self.control_messages.append(data)
+        raise RuntimeError("provider cancel failed")
+
+
 class PlaybackExecution(FakeExecution):
     def __init__(self) -> None:
         super().__init__()
         self.played_audio: list[bytes] = []
         self.playout_done = asyncio.Event()
         self.interrupted = False
+        self.interrupt_count = 0
 
     async def play_assistant_audio(self, audio: bytes) -> None:
         self.played_audio.append(audio)
@@ -377,3 +531,4 @@ class PlaybackExecution(FakeExecution):
 
     async def interrupt_playback(self) -> None:
         self.interrupted = True
+        self.interrupt_count += 1
