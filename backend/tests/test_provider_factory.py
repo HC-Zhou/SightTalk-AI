@@ -5,7 +5,9 @@ import pytest
 from sighttalk_api.core.config import Settings
 from sighttalk_api.providers.bailian import BailianRealtimeProvider
 from sighttalk_api.providers.factory import create_provider
+from sighttalk_api.providers.gemini_live import GeminiLiveProvider
 from sighttalk_api.providers.mock import MockRealtimeProvider
+from sighttalk_api.providers.openai_realtime import OpenAIRealtimeProvider
 
 
 def test_provider_factory_selects_bailian() -> None:
@@ -58,6 +60,38 @@ def test_provider_factory_selects_mock() -> None:
     provider = create_provider(settings)
 
     assert isinstance(provider, MockRealtimeProvider)
+
+
+def test_provider_factory_selects_openai() -> None:
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="key",
+        openai_realtime_model="gpt-realtime",
+        openai_realtime_url="wss://example.test/realtime",
+        openai_realtime_voice="verse",
+    )
+
+    provider = create_provider(settings)
+
+    assert isinstance(provider, OpenAIRealtimeProvider)
+    assert provider._model == "gpt-realtime"  # noqa: SLF001
+    assert provider._voice == "verse"  # noqa: SLF001
+
+
+def test_provider_factory_selects_gemini() -> None:
+    settings = Settings(
+        ai_provider="gemini",
+        gemini_api_key="key",
+        gemini_live_model="gemini-live",
+        gemini_live_url="wss://example.test/live",
+        gemini_live_voice="Puck",
+    )
+
+    provider = create_provider(settings)
+
+    assert isinstance(provider, GeminiLiveProvider)
+    assert provider._model == "gemini-live"  # noqa: SLF001
+    assert provider._voice == "Puck"  # noqa: SLF001
 
 
 def test_provider_factory_rejects_unknown_provider() -> None:

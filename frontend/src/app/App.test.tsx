@@ -132,6 +132,28 @@ function mockSessionFetch() {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }
+    if (url.endsWith('/api/v1/conversations') && init?.method === 'GET') {
+      return new Response(JSON.stringify({ conversations: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (url.endsWith('/api/v1/conversations') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as {
+        session_id: string;
+        messages: Array<{ text: string }>;
+      };
+      return new Response(
+        JSON.stringify({
+          id: body.session_id,
+          title: body.messages[0]?.text ?? '对话记录',
+          created_at: '2026-06-13T12:00:00Z',
+          ended_at: '2026-06-13T12:01:00Z',
+          messages: body.messages,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
     if (url.endsWith('/api/v1/livekit/session')) {
       return new Response(
         JSON.stringify({
@@ -245,6 +267,7 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '开始' }));
 
     expect(await screen.findByText('Listening')).toBeInTheDocument();
+    expect(screen.queryByLabelText('历史对话')).not.toBeInTheDocument();
     const room = await latestRoom();
     expect(room.connect).toHaveBeenCalledWith('ws://localhost:7880', 'token');
     expect(room.localParticipant.publishTrack).toHaveBeenCalledTimes(2);
@@ -264,6 +287,28 @@ describe('App', () => {
         }),
       ),
     );
+  });
+
+  it('hides the history sidebar during video and restores it after ending', async () => {
+    const { stream } = createStream();
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await signIn(user);
+
+    expect(screen.getByLabelText('历史对话')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '开始' }));
+    expect(await screen.findByText('Listening')).toBeInTheDocument();
+    expect(screen.queryByLabelText('历史对话')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '结束' }));
+
+    expect(await screen.findByLabelText('历史对话')).toBeInTheDocument();
   });
 
   it('hides realtime captions and sends interrupt only', async () => {
@@ -452,6 +497,121 @@ describe('App', () => {
       'http://localhost:8000/api/v1/livekit/session/sighttalk-test/end',
       expect.objectContaining({
         method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
+      }),
+    );
+  });
+
+  it('saves ended video transcripts in the history sidebar', async () => {
+    const { stream } = createStream();
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await signIn(user);
+
+    await user.click(screen.getByRole('button', { name: '开始' }));
+    const room = await latestRoom();
+
+    act(() => {
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'user',
+        text: '今天的天气怎么样',
+        message_id: 'user-weather',
+      });
+      room.emitData({
+        type: 'transcript.done',
+        session_id: 'sighttalk-test',
+        timestamp: new Date().toISOString(),
+        speaker: 'assistant',
+        text: '今天适合出门散步。',
+        message_id: 'assistant-weather',
+      });
+    });
+
+    expect(screen.queryByText('今天的天气怎么样')).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: '结束' }));
+
+    expect(await screen.findByRole('button', { name: /今天的天气怎么样/ })).toBeInTheDocument();
+    expect(screen.getByLabelText('对话记录')).toHaveTextContent('今天适合出门散步。');
+    expect(fetch).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/conversations',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
+        body: expect.stringContaining('今天的天气怎么样'),
+      }),
+    );
+    expect(localStorage.getItem('sighttalk.conversation-history.user-test')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: '关闭记录' }));
+    expect(screen.queryByLabelText('对话记录')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /今天的天气怎么样/ }));
+    expect(screen.getByLabelText('对话记录')).toHaveTextContent('今天的天气怎么样');
+  });
+
+  it('loads authenticated conversation history into the sidebar', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/v1/auth/login')) {
+        return new Response(
+          JSON.stringify({
+            user: {
+              user_id: 'user-test',
+              email: 'ada@example.com',
+              created_at: '2026-06-13T12:00:00Z',
+            },
+            access_token: 'auth-token',
+            token_type: 'bearer',
+            expires_at: '2026-06-20T12:00:00Z',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/api/v1/conversations')) {
+        return new Response(
+          JSON.stringify({
+            conversations: [
+              {
+                id: 'room-history',
+                title: '历史里的问题',
+                created_at: '2026-06-13T12:00:00Z',
+                ended_at: '2026-06-13T12:01:00Z',
+                messages: [
+                  {
+                    id: 'user-history',
+                    speaker: 'user',
+                    text: '历史里的问题',
+                    final: true,
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return mockSessionFetch()(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await signIn(user);
+
+    expect(await screen.findByRole('button', { name: /历史里的问题/ })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/conversations',
+      expect.objectContaining({
+        method: 'GET',
         headers: expect.objectContaining({ Authorization: 'Bearer auth-token' }),
       }),
     );
