@@ -9,6 +9,7 @@ from fastapi import Depends, Header
 from sighttalk_api.core.config import Settings, get_settings
 from sighttalk_api.core.errors import AppError
 from sighttalk_api.services.auth import AuthService, StoredUser, UserStore
+from sighttalk_api.services.conversation_history import ConversationHistoryStore
 
 
 def get_user_store(
@@ -24,6 +25,13 @@ def get_auth_service(
 ) -> AuthService:
     """Create the authentication service for the current request scope."""
     return AuthService(settings=settings, user_store=user_store)
+
+
+def get_conversation_history_store(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ConversationHistoryStore:
+    """Create the file-backed transcript history store."""
+    return ConversationHistoryStore(settings.sighttalk_data_dir)
 
 
 def get_current_user(

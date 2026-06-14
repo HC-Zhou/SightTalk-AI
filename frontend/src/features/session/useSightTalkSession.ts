@@ -203,7 +203,15 @@ export function useSightTalkSession(authToken?: string) {
   }, [authToken, handleDataReceived, stopMedia]);
 
   const start = useCallback(async () => {
-    setState((current) => ({ ...current, status: 'requesting-permission', error: undefined }));
+    setState((current) => ({
+      ...current,
+      status: 'requesting-permission',
+      messages: [],
+      cost: undefined,
+      error: undefined,
+      session: undefined,
+      assistantAudioActive: false,
+    }));
     try {
       if (!authToken) {
         throw new Error('Please sign in before starting a session');

@@ -13,6 +13,13 @@ from sighttalk_api.schemas.livekit import MediaMode, MediaPolicy
 
 DEFAULT_BAILIAN_REALTIME_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_BAILIAN_REALTIME_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+DEFAULT_OPENAI_REALTIME_MODEL = "gpt-realtime"
+DEFAULT_OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
+DEFAULT_GEMINI_LIVE_MODEL = "gemini-2.0-flash-live-001"
+DEFAULT_GEMINI_LIVE_URL = (
+    "wss://generativelanguage.googleapis.com/ws/"
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+)
 MemoryBackend = Literal["local_markdown", "local_jsonl", "disabled"]
 
 
@@ -55,6 +62,16 @@ class Settings(BaseSettings):
     bailian_realtime_url: str = DEFAULT_BAILIAN_REALTIME_URL
     bailian_turn_silence_duration_ms: int = 800
     ai_manual_response_enabled: bool = False
+
+    openai_api_key: str = ""
+    openai_realtime_model: str = DEFAULT_OPENAI_REALTIME_MODEL
+    openai_realtime_url: str = DEFAULT_OPENAI_REALTIME_URL
+    openai_realtime_voice: str = "alloy"
+
+    gemini_api_key: str = ""
+    gemini_live_model: str = DEFAULT_GEMINI_LIVE_MODEL
+    gemini_live_url: str = DEFAULT_GEMINI_LIVE_URL
+    gemini_live_voice: str = "Zephyr"
 
     default_media_mode: MediaMode = "balanced"
     audio_noise_suppression_enabled: bool = True
@@ -99,6 +116,10 @@ class Settings(BaseSettings):
             ):
                 if not value:
                     missing.append(env_name)
+        if self.ai_provider == "openai" and not self.openai_api_key:
+            missing.append("OPENAI_API_KEY")
+        if self.ai_provider == "gemini" and not self.gemini_api_key:
+            missing.append("GEMINI_API_KEY")
         if missing:
             joined = ", ".join(missing)
             raise ValueError(f"Missing required configuration: {joined}")

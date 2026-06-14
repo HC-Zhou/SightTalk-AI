@@ -1,10 +1,22 @@
-import { LogOut, Phone, PhoneOff, Sparkles, UserRound, Zap } from 'lucide-react';
+import {
+  Clock,
+  LogOut,
+  MessageSquareText,
+  Phone,
+  PhoneOff,
+  Sparkles,
+  UserRound,
+  X,
+  Zap,
+} from 'lucide-react';
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 import { getCurrentUser, loginUser, registerUser } from '../features/auth/api';
 import type { AuthCredentials, AuthResponse, AuthUser } from '../features/auth/types';
+import { listConversations, saveConversation } from '../features/conversations/api';
+import type { ConversationArchive } from '../features/conversations/types';
 import { useSightTalkSession, statusLabel } from '../features/session/useSightTalkSession';
-import type { SessionStatus } from '../features/session/types';
+import type { ConversationMessage, SessionStatus } from '../features/session/types';
 
 const cn = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
 const AUTH_TOKEN_STORAGE_KEY = 'sighttalk.auth.token';
@@ -51,12 +63,18 @@ const statusDotClasses: Record<SessionStatus, string> = {
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const savedSessionIdsRef = useRef<Set<string>>(new Set());
   const [authToken, setAuthToken] = useState(() => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? '');
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
   const [authLoading, setAuthLoading] = useState(() => Boolean(localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)));
+  const [conversationHistory, setConversationHistory] = useState<ConversationArchive[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | undefined>(undefined);
   const session = useSightTalkSession(authToken || undefined);
   const canStart = session.status === 'idle' || session.status === 'ended' || session.status === 'error';
   const isActive = !canStart && session.status !== 'requesting-permission';
+  const selectedConversation = conversationHistory.find(
+    (conversation) => conversation.id === selectedConversationId,
+  );
 
   useEffect(() => {
     if (videoRef.current) {
@@ -68,6 +86,9 @@ export function App() {
     if (!authToken) {
       setAuthUser(undefined);
       setAuthLoading(false);
+      setConversationHistory([]);
+      setSelectedConversationId(undefined);
+      savedSessionIdsRef.current = new Set();
       return;
     }
     let cancelled = false;
@@ -92,6 +113,78 @@ export function App() {
     };
   }, [authToken]);
 
+  useEffect(() => {
+    if (!authUser || !authToken) {
+      setConversationHistory([]);
+      setSelectedConversationId(undefined);
+      savedSessionIdsRef.current = new Set();
+      return;
+    }
+    let cancelled = false;
+    void listConversations(authToken)
+      .then((history) => {
+        if (cancelled) {
+          return;
+        }
+        savedSessionIdsRef.current = new Set(history.map((conversation) => conversation.id));
+        setConversationHistory(history);
+        setSelectedConversationId((current) =>
+          current && history.some((conversation) => conversation.id === current)
+            ? current
+            : history[0]?.id,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          savedSessionIdsRef.current = new Set();
+          setConversationHistory([]);
+          setSelectedConversationId(undefined);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, authUser]);
+
+  const saveFinishedConversation = useCallback(() => {
+    if (!authToken || !authUser || !session.session || savedSessionIdsRef.current.has(session.session.room_name)) {
+      return;
+    }
+    const archive = createConversationArchive(session.session.room_name, session.messages);
+    if (!archive) {
+      return;
+    }
+    savedSessionIdsRef.current.add(archive.id);
+    setConversationHistory((current) => {
+      const next = [archive, ...current.filter((conversation) => conversation.id !== archive.id)];
+      return next;
+    });
+    setSelectedConversationId(archive.id);
+    void saveConversation(
+      {
+        session_id: archive.id,
+        messages: archive.messages,
+      },
+      authToken,
+    )
+      .then((savedArchive) => {
+        setConversationHistory((current) => [
+          savedArchive,
+          ...current.filter((conversation) => conversation.id !== savedArchive.id),
+        ]);
+        setSelectedConversationId(savedArchive.id);
+      })
+      .catch(() => {
+        // The transcript remains visible locally for this page even if persistence fails.
+      });
+  }, [authToken, authUser, session.messages, session.session]);
+
+  useEffect(() => {
+    if (session.status === 'ended') {
+      saveFinishedConversation();
+    }
+  }, [saveFinishedConversation, session.status]);
+
   const handleAuthenticated = useCallback((response: AuthResponse) => {
     localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, response.access_token);
     setAuthToken(response.access_token);
@@ -101,11 +194,17 @@ export function App() {
 
   const handleLogout = useCallback(async () => {
     await session.stop();
+    saveFinishedConversation();
     localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
     setAuthToken('');
     setAuthUser(undefined);
     setAuthLoading(false);
-  }, [session]);
+  }, [saveFinishedConversation, session]);
+
+  const handleStop = useCallback(async () => {
+    await session.stop();
+    saveFinishedConversation();
+  }, [saveFinishedConversation, session]);
 
   if (!authToken || !authUser) {
     return (
@@ -133,8 +232,19 @@ export function App() {
       )}
 
       {!session.localPreviewStream && (
+        <ConversationSidebar
+          conversations={conversationHistory}
+          selectedConversationId={selectedConversationId}
+          onSelect={setSelectedConversationId}
+        />
+      )}
+
+      {!session.localPreviewStream && (
         <section
-          className="absolute inset-0 z-30 grid place-content-center justify-items-center bg-slate-950/25"
+          className={cn(
+            'absolute inset-0 z-30 grid place-content-center justify-items-center bg-slate-950/25',
+            'pl-[320px]',
+          )}
           aria-label="Start conversation"
         >
           <div className="flex items-center gap-[18px] text-left">
@@ -151,7 +261,19 @@ export function App() {
         </section>
       )}
 
-      <header className="absolute left-8 top-7 z-40">
+      {selectedConversation && !session.localPreviewStream && (
+        <ConversationDetail
+          conversation={selectedConversation}
+          onClose={() => setSelectedConversationId(undefined)}
+        />
+      )}
+
+      <header
+        className={cn(
+          'absolute top-7 z-40 transition-[left] duration-150',
+          session.localPreviewStream ? 'left-8' : 'left-[348px]',
+        )}
+      >
         <div className={cn(pillSurface, 'flex min-h-[58px] min-w-[220px] items-center gap-[13px] px-[18px]')}>
           <span
             className={cn(
@@ -205,7 +327,7 @@ export function App() {
             </button>
           ) : (
             <>
-              <button className={cn(secondaryButton, dockButtonGlow)} onClick={session.stop} type="button">
+              <button className={cn(secondaryButton, dockButtonGlow)} onClick={handleStop} type="button">
                 <PhoneOff size={20} />
                 结束
               </button>
@@ -218,6 +340,138 @@ export function App() {
         </div>
       </footer>
     </main>
+  );
+}
+
+interface ConversationSidebarProps {
+  conversations: ConversationArchive[];
+  selectedConversationId?: string;
+  onSelect: (conversationId: string) => void;
+}
+
+function ConversationSidebar({
+  conversations,
+  selectedConversationId,
+  onSelect,
+}: ConversationSidebarProps) {
+  return (
+    <aside
+      aria-label="历史对话"
+      className="absolute bottom-6 left-6 top-6 z-50 flex w-[300px] flex-col overflow-hidden rounded-[26px] border border-white/16 bg-slate-950/58 p-4 text-white shadow-[0_24px_60px_rgba(2,6,23,0.26)] backdrop-blur-xl"
+    >
+      <div className="mb-4 flex min-h-[42px] items-center gap-3 px-1">
+        <span className="grid h-10 w-10 place-items-center rounded-2xl bg-cyan-300 text-slate-950 shadow-[0_12px_26px_rgba(34,211,238,0.22)]">
+          <MessageSquareText size={19} />
+        </span>
+        <div>
+          <p className="m-0 text-[0.76rem] font-extrabold uppercase text-cyan-100/70">
+            Conversations
+          </p>
+          <h2 className="m-0 text-[1.05rem] leading-tight">历史对话</h2>
+        </div>
+      </div>
+
+      {conversations.length === 0 ? (
+        <div className="grid flex-1 place-items-center rounded-[18px] border border-dashed border-white/14 px-5 text-center text-sm font-bold leading-6 text-white/58">
+          暂无记录
+        </div>
+      ) : (
+        <nav className="-mx-1 flex flex-1 flex-col gap-1 overflow-y-auto pr-1" aria-label="历史对话列表">
+          {conversations.map((conversation) => {
+            const selected = conversation.id === selectedConversationId;
+            return (
+              <button
+                aria-pressed={selected}
+                className={cn(
+                  'grid min-h-[76px] cursor-pointer grid-cols-[auto_1fr] gap-3 rounded-[18px] border px-3 py-3 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200',
+                  selected
+                    ? 'border-cyan-200/42 bg-cyan-100/18 text-white shadow-[0_12px_30px_rgba(14,165,233,0.16)]'
+                    : 'border-transparent bg-white/0 text-white/78 hover:bg-white/10',
+                )}
+                key={conversation.id}
+                onClick={() => onSelect(conversation.id)}
+                type="button"
+              >
+                <span
+                  className={cn(
+                    'mt-0.5 grid h-9 w-9 place-items-center rounded-2xl',
+                    selected ? 'bg-cyan-300 text-slate-950' : 'bg-white/10 text-cyan-100',
+                  )}
+                >
+                  <MessageSquareText size={17} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block overflow-hidden text-ellipsis whitespace-nowrap text-sm font-extrabold">
+                    {conversation.title}
+                  </span>
+                  <span className="mt-2 flex items-center gap-1.5 text-[0.75rem] font-bold text-white/52">
+                    <Clock size={13} />
+                    {formatConversationDate(conversation.endedAt)}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
+    </aside>
+  );
+}
+
+interface ConversationDetailProps {
+  conversation: ConversationArchive;
+  onClose: () => void;
+}
+
+function ConversationDetail({ conversation, onClose }: ConversationDetailProps) {
+  return (
+    <section
+      aria-label="对话记录"
+      className="absolute bottom-[118px] left-[356px] right-8 top-[112px] z-40 flex min-h-[360px] flex-col overflow-hidden rounded-[28px] border border-white/18 bg-slate-950/62 text-white shadow-[0_28px_70px_rgba(2,6,23,0.28)] backdrop-blur-xl"
+    >
+      <header className="flex min-h-[78px] items-center justify-between gap-4 border-b border-white/10 px-6">
+        <div className="min-w-0">
+          <p className="m-0 mb-1 text-[0.78rem] font-extrabold uppercase text-cyan-100/64">
+            Transcript
+          </p>
+          <h2 className="m-0 overflow-hidden text-ellipsis whitespace-nowrap text-[1.35rem] leading-tight">
+            {conversation.title}
+          </h2>
+        </div>
+        <button
+          aria-label="关闭记录"
+          className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full border border-white/12 bg-white/10 text-white transition hover:bg-white/18 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+          onClick={onClose}
+          title="关闭记录"
+          type="button"
+        >
+          <X size={20} />
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="grid gap-3">
+          {conversation.messages.map((message) => (
+            <article
+              className={cn(
+                'rounded-[18px] border px-4 py-3',
+                message.speaker === 'user'
+                  ? 'border-cyan-200/20 bg-cyan-50/10'
+                  : 'border-white/10 bg-white/10',
+              )}
+              key={message.id}
+            >
+              <p className="m-0 mb-2 text-[0.76rem] font-extrabold uppercase text-white/48">
+                {message.speaker === 'user' ? '我' : '助手'}
+              </p>
+              <p className="m-0 whitespace-pre-wrap text-[0.98rem] font-semibold leading-7 text-white/88">
+                {message.text}
+              </p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -331,4 +585,49 @@ function AuthScreen({ checking, onAuthenticated }: AuthScreenProps) {
       </section>
     </main>
   );
+}
+
+function createConversationArchive(
+  sessionId: string,
+  messages: ConversationMessage[],
+): ConversationArchive | null {
+  const transcriptMessages = messages
+    .map((message) => ({ ...message, text: message.text.trim() }))
+    .filter((message) => message.text.length > 0);
+  if (transcriptMessages.length === 0) {
+    return null;
+  }
+  const endedAt = new Date().toISOString();
+  return {
+    id: sessionId,
+    title: createConversationTitle(transcriptMessages),
+    createdAt: endedAt,
+    endedAt,
+    messages: transcriptMessages,
+  };
+}
+
+function createConversationTitle(messages: ConversationMessage[]) {
+  const firstUserMessage = messages.find((message) => message.speaker === 'user') ?? messages[0];
+  return truncateText(firstUserMessage.text, 28);
+}
+
+function truncateText(text: string, maxLength: number) {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function formatConversationDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
