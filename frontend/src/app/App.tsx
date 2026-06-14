@@ -56,7 +56,7 @@ const statusDotClasses: Record<SessionStatus, string> = {
   listening: 'bg-emerald-500 shadow-[0_0_0_8px_rgba(16,185,129,0.16)]',
   thinking: 'bg-amber-500 shadow-[0_0_0_8px_rgba(245,158,11,0.16)]',
   speaking: 'bg-emerald-500 shadow-[0_0_0_8px_rgba(16,185,129,0.16)]',
-  interrupted: 'bg-rose-500 shadow-[0_0_0_8px_rgba(244,63,94,0.16)]',
+  interrupted: 'bg-emerald-500 shadow-[0_0_0_8px_rgba(16,185,129,0.16)]',
   error: 'bg-rose-500 shadow-[0_0_0_8px_rgba(244,63,94,0.16)]',
   ended: 'bg-slate-400',
 };

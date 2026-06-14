@@ -68,6 +68,8 @@ export interface BaseRealtimeEvent {
   type: string;
   session_id: string;
   timestamp: string;
+  response_epoch?: number;
+  response_id?: string;
 }
 
 export interface AgentStatusEvent extends BaseRealtimeEvent {
@@ -113,6 +115,25 @@ export interface AgentErrorEvent extends BaseRealtimeEvent {
   type: 'error';
   code: string;
   message: string;
+  severity?: 'recoverable' | 'terminal';
+  surface?: 'diagnostic' | 'session';
+}
+
+export interface DiagnosticErrorEvent extends BaseRealtimeEvent {
+  type: 'diagnostic.error';
+  diagnostic_id: string;
+  severity: 'recoverable' | 'terminal';
+  surface: 'diagnostic' | 'session';
+  code: string;
+  message: string;
+}
+
+export interface SessionTerminalEvent extends BaseRealtimeEvent {
+  type: 'session.terminal';
+  severity: 'terminal';
+  surface: 'session';
+  code: string;
+  message: string;
 }
 
 export type RealtimeEvent =
@@ -122,7 +143,9 @@ export type RealtimeEvent =
   | ResponseDoneEvent
   | AudioDeltaEvent
   | CostEstimateEvent
-  | AgentErrorEvent;
+  | AgentErrorEvent
+  | DiagnosticErrorEvent
+  | SessionTerminalEvent;
 
 export interface ConversationMessage {
   id: string;
@@ -134,6 +157,8 @@ export interface ConversationMessage {
 export interface SightTalkError {
   code: string;
   message: string;
+  severity?: 'recoverable' | 'terminal';
+  surface?: 'diagnostic' | 'session';
 }
 
 export interface CostEstimate {

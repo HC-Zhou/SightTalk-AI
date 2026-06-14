@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from sighttalk_api.agent.prompts import BASE_SYSTEM_PROMPT
 from sighttalk_api.agent.runtime_workers import ContextWorker, MemoryWorker
@@ -246,6 +247,54 @@ class AgentSessionContext:
             "image_frames_sent": self.image_frames_sent,
             **dict(fields),
         }
+
+    def diagnostic_event(
+        self,
+        code: str,
+        message: str,
+        *,
+        severity: Literal["recoverable", "terminal"] = "recoverable",
+        surface: Literal["diagnostic", "session"] = "diagnostic",
+        response_epoch: int | None = None,
+        fields: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create an operator-facing diagnostic event that need not alter visible UI."""
+        payload: dict[str, Any] = {
+            "type": "diagnostic.error",
+            "session_id": self.session_id,
+            "timestamp": utc_now(),
+            "diagnostic_id": f"diag-{uuid4().hex}",
+            "severity": severity,
+            "surface": surface,
+            "code": code,
+            "message": message,
+        }
+        if response_epoch is not None:
+            payload["response_epoch"] = response_epoch
+        if fields:
+            payload.update(dict(fields))
+        return payload
+
+    def terminal_event(
+        self,
+        code: str,
+        message: str,
+        *,
+        response_epoch: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a terminal session event without using the visible error contract."""
+        payload: dict[str, Any] = {
+            "type": "session.terminal",
+            "session_id": self.session_id,
+            "timestamp": utc_now(),
+            "severity": "terminal",
+            "surface": "session",
+            "code": code,
+            "message": message,
+        }
+        if response_epoch is not None:
+            payload["response_epoch"] = response_epoch
+        return payload
 
     def error_event(self, code: str, message: str) -> dict[str, Any]:
         """Create a frontend-safe error event without provider credentials or internals."""
