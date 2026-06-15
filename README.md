@@ -6,6 +6,12 @@ SightTalk AI is a PC web visual voice assistant. The browser captures camera and
 
 The application code in this repository is newly implemented for this project. Third-party dependencies are used for the framework, media transport, validation, testing, and build tooling; the original application logic is the session API, provider adapter boundary, media policy logic, realtime event contract, and PC web client experience.
 
+## Video
+
+我用夸克网盘给你分享了「lv_0_202...1712」，点击链接或复制整段内容，打开「夸克网盘APP」即可获取。
+/~f2aa3Z3q1w~:/
+链接：https://pan.quark.cn/s/08a6de9fae98
+
 ## Dependencies
 
 Backend:
