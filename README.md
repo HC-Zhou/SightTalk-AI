@@ -8,9 +8,9 @@ The application code in this repository is newly implemented for this project. T
 
 ## Video
 
-我用夸克网盘给你分享了「lv_0_202...1712」，点击链接或复制整段内容，打开「夸克网盘APP」即可获取。
-/~f2aa3Z3q1w~:/
-链接：https://pan.quark.cn/s/08a6de9fae98
+<video src="./video.mp4" controls width="100%"></video>
+
+If the video does not render in your Markdown viewer, open [video.mp4](./video.mp4).
 
 ## Dependencies
 
